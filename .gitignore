@@ -25,7 +25,7 @@ aclocal.m4
 autom4te.cache
 autoregen.sh
 config.guess
-config.h
+# config.h
 config.h.in
 config.log
 config.status
