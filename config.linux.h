@@ -89,7 +89,7 @@
 #define PACKAGE_NAME "libnice"
 
 /* Define to the full name and version of this package. */
-#define PACKAGE_STRING "libnice 0.1.10"
+#define PACKAGE_STRING "libnice 0.1.14.1"
 
 /* Define to the one symbol short name of this package. */
 #define PACKAGE_TARNAME "libnice"
@@ -98,7 +98,7 @@
 #define PACKAGE_URL ""
 
 /* Define to the version of this package. */
-#define PACKAGE_VERSION "0.1.10"
+#define PACKAGE_VERSION "0.1.14.1"
 
 /* Define to 1 if you have the ANSI C header files. */
 #define STDC_HEADERS 1
@@ -126,7 +126,7 @@
 
 
 /* Version number of package */
-#define VERSION "0.1.10"
+#define VERSION "0.1.14.1"
 
 /* Define to `2' to get GNU/libc warnings. */
 /* Only define if -O1 or more is enabled */
