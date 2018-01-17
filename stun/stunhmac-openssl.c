@@ -44,18 +44,20 @@ void stun_sha1 (const uint8_t *msg, size_t len, size_t msg_len,
 
   HMAC_CTX_cleanup(&handle);
   HMAC_cleanup(&handle);
+
+#undef TRY
 }
 
 static const uint8_t *priv_trim_var(const uint8_t *var, size_t *var_len)
 {
   const uint8_t *ptr = var;
 
-  while (*ptr == '"') {
+  while (*var_len > 0 && *ptr == '"') {
     ptr++;
     (*var_len)--;
   }
-  while(ptr[*var_len-1] == '"' ||
-      ptr[*var_len-1] == 0) {
+  while(*var_len > 0 && (ptr[*var_len-1] == '"' ||
+      ptr[*var_len-1] == 0)) {
     (*var_len)--;
   }
 
