@@ -358,12 +358,6 @@ void nice_socket_queue_send_with_callback (GQueue *send_queue,
   else
     g_queue_push_tail (send_queue, tbs);
 
-  if (io_source && gsock && context && cb && *io_source == NULL) {
-    *io_source = g_socket_create_source(gsock, G_IO_OUT, NULL);
-    g_source_set_callback (*io_source, (GSourceFunc) G_CALLBACK (cb), user_data, NULL);
-    g_source_attach (*io_source, context);
-  }
-
   /* Move the data into the buffer. */
   for (j = 0;
        (message->n_buffers >= 0 && j < (guint) message->n_buffers) ||
@@ -385,6 +379,12 @@ void nice_socket_queue_send_with_callback (GQueue *send_queue,
       message_offset -= len;
     else
       message_offset = 0;
+  }
+
+  if (io_source && gsock && context && cb && *io_source == NULL) {
+    *io_source = g_socket_create_source(gsock, G_IO_OUT, NULL);
+    g_source_set_callback (*io_source, (GSourceFunc) G_CALLBACK (cb), user_data, NULL);
+    g_source_attach (*io_source, context);
   }
 }
 
@@ -452,4 +452,33 @@ nice_socket_free_send_queue (GQueue *send_queue)
 {
   g_list_free_full (send_queue->head, (GDestroyNotify) nice_socket_free_queued_send);
   g_queue_init (send_queue);
+}
+
+const gchar *
+nice_socket_type_to_string (NiceSocketType type)
+{
+  switch (type) {
+    case NICE_SOCKET_TYPE_UDP_BSD:
+      return "udp";
+    case NICE_SOCKET_TYPE_TCP_BSD:
+      return "tcp";
+    case NICE_SOCKET_TYPE_PSEUDOSSL:
+      return "ssl";
+    case NICE_SOCKET_TYPE_HTTP:
+      return "http";
+    case NICE_SOCKET_TYPE_SOCKS5:
+      return "socks";
+    case NICE_SOCKET_TYPE_UDP_TURN:
+      return "udp-turn";
+    case NICE_SOCKET_TYPE_UDP_TURN_OVER_TCP:
+      return "tcp-turn";
+    case NICE_SOCKET_TYPE_TCP_ACTIVE:
+      return "tcp-act";
+    case NICE_SOCKET_TYPE_TCP_PASSIVE:
+      return "tcp-pass";
+    case NICE_SOCKET_TYPE_TCP_SO:
+      return "tcp-so";
+    default:
+      return "<unknown>";
+  }
 }

@@ -61,9 +61,11 @@ static void
 test_socket_initial_properties (void)
 {
   NiceSocket *sock;
+  GError *error = NULL;
 
-  sock = nice_udp_bsd_socket_new (NULL);
-  g_assert (sock != NULL);
+  sock = nice_udp_bsd_socket_new (NULL, NULL, &error);
+  g_assert_no_error (error);
+  g_assert_true (sock != NULL);
 
   // not bound to a particular interface
   g_assert_cmpint (sock->addr.s.ip4.sin_addr.s_addr, ==, 0);
@@ -78,11 +80,13 @@ test_socket_address_properties (void)
 {
   NiceSocket *sock;
   NiceAddress tmp;
+  GError *error = NULL;
 
-  sock = nice_udp_bsd_socket_new (NULL);
-  g_assert (sock != NULL);
+  sock = nice_udp_bsd_socket_new (NULL, NULL, &error);
+  g_assert_no_error (error);
+  g_assert_true (sock != NULL);
 
-  g_assert (nice_address_set_from_string (&tmp, "127.0.0.1"));
+  g_assert_true (nice_address_set_from_string (&tmp, "127.0.0.1"));
   g_assert_cmpuint (nice_address_get_port (&sock->addr), !=, 0);
   nice_address_set_port (&tmp, nice_address_get_port (&sock->addr));
   g_assert_cmpuint (nice_address_get_port (&tmp), !=, 0);
@@ -97,14 +101,17 @@ test_simple_send_recv (void)
   NiceSocket *client;
   NiceAddress tmp;
   gchar buf[5];
+  GError *error = NULL;
 
-  server = nice_udp_bsd_socket_new (NULL);
-  g_assert (server != NULL);
+  server = nice_udp_bsd_socket_new (NULL, NULL, &error);
+  g_assert_no_error (error);
+  g_assert_true (server != NULL);
 
-  client = nice_udp_bsd_socket_new (NULL);
-  g_assert (client != NULL);
+  client = nice_udp_bsd_socket_new (NULL, NULL, &error);
+  g_assert_no_error (error);
+  g_assert_true (client != NULL);
 
-  g_assert (nice_address_set_from_string (&tmp, "127.0.0.1"));
+  g_assert_true (nice_address_set_from_string (&tmp, "127.0.0.1"));
   nice_address_set_port (&tmp, nice_address_get_port (&server->addr));
 
   /* Send and receive stuff. */
@@ -132,11 +139,13 @@ test_zero_send_recv (void)
   gchar buf[5];
   NiceOutputMessage local_out_message;
   NiceInputMessage local_in_message;
+  GError *error = NULL;
 
-  sock = nice_udp_bsd_socket_new (NULL);
-  g_assert (sock != NULL);
+  sock = nice_udp_bsd_socket_new (NULL, NULL, &error);
+  g_assert_no_error (error);
+  g_assert_true (sock != NULL);
 
-  g_assert (nice_address_set_from_string (&tmp, "127.0.0.1"));
+  g_assert_true (nice_address_set_from_string (&tmp, "127.0.0.1"));
   g_assert_cmpuint (nice_address_get_port (&sock->addr), !=, 0);
   nice_address_set_port (&tmp, nice_address_get_port (&sock->addr));
   g_assert_cmpuint (nice_address_get_port (&tmp), !=, 0);
@@ -148,6 +157,7 @@ test_zero_send_recv (void)
   g_assert_cmpint (socket_recv (sock, &tmp, 0, NULL), ==, 0);
 
   /* And again with messages. */
+  memset(&local_out_message, 0, sizeof(local_out_message));
   g_assert_cmpint (nice_socket_send_messages (sock, &tmp,
       &local_out_message, 0), ==, 0);
   g_assert_cmpint (nice_socket_send_messages (sock, &tmp, NULL, 0), ==, 0);
@@ -168,14 +178,17 @@ test_multi_buffer_recv (void)
   NiceAddress tmp;
   guint8 buf[20];
   guint8 dummy_buf[9];
+  GError *error = NULL;
 
-  server = nice_udp_bsd_socket_new (NULL);
-  g_assert (server != NULL);
+  server = nice_udp_bsd_socket_new (NULL, NULL, &error);
+  g_assert_no_error (error);
+  g_assert_true (server != NULL);
 
-  client = nice_udp_bsd_socket_new (NULL);
-  g_assert (client != NULL);
+  client = nice_udp_bsd_socket_new (NULL, NULL, &error);
+  g_assert_no_error (error);
+  g_assert_true (client != NULL);
 
-  g_assert (nice_address_set_from_string (&tmp, "127.0.0.1"));
+  g_assert_true (nice_address_set_from_string (&tmp, "127.0.0.1"));
   nice_address_set_port (&tmp, nice_address_get_port (&server->addr));
 
   /* Send and receive stuff. */
@@ -210,7 +223,7 @@ test_multi_buffer_recv (void)
     g_assert_cmpuint (bufs[6].size, ==, 0);
 
     g_assert_cmpint (strncmp ((gchar *) buf, "hello-world", 11), ==, 0);
-    g_assert_cmpint (memcmp (buf + 11, dummy_buf, 9), ==, 0);
+    g_assert_cmpmem (buf + 11, 9, dummy_buf, 9);
   }
 
   nice_socket_free (client);
@@ -239,14 +252,17 @@ test_multi_message_recv (guint n_sends, guint n_receives,
   NiceSocket *server;
   NiceSocket *client;
   NiceAddress tmp;
+  GError *error = NULL;
 
-  server = nice_udp_bsd_socket_new (NULL);
-  g_assert (server != NULL);
+  server = nice_udp_bsd_socket_new (NULL, NULL, &error);
+  g_assert_no_error (error);
+  g_assert_true (server != NULL);
 
-  client = nice_udp_bsd_socket_new (NULL);
-  g_assert (client != NULL);
+  client = nice_udp_bsd_socket_new (NULL, NULL, &error);
+  g_assert_no_error (error);
+  g_assert_true (client != NULL);
 
-  g_assert (nice_address_set_from_string (&tmp, "127.0.0.1"));
+  g_assert_true (nice_address_set_from_string (&tmp, "127.0.0.1"));
   nice_address_set_port (&tmp, nice_address_get_port (&server->addr));
 
   /* Send and receive stuff. */

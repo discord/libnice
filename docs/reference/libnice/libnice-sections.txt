@@ -29,6 +29,7 @@ nice_agent_set_remote_candidates
 nice_agent_get_remote_candidates
 nice_agent_get_local_candidates
 nice_agent_get_selected_pair
+nice_agent_peer_candidate_gathering_done
 nice_agent_send
 nice_agent_send_messages_nonblocking
 nice_agent_recv
@@ -53,8 +54,12 @@ nice_agent_parse_remote_stream_sdp
 nice_agent_parse_remote_candidate_sdp
 nice_agent_get_io_stream
 nice_agent_get_selected_socket
+nice_agent_get_sockets
 nice_agent_get_component_state
+nice_agent_close_async
+nice_agent_consent_lost
 nice_component_state_to_string
+NICE_CHECK_VERSION
 <SUBSECTION Standard>
 NICE_AGENT
 NICE_IS_AGENT
@@ -77,6 +82,10 @@ nice_nomination_mode_get_type
 nice_proxy_type_get_type
 <SUBSECTION Private>
 NiceAgentClass
+NICE_VERSION_MAJOR
+NICE_VERSION_MICRO
+NICE_VERSION_MINOR
+NICE_VERSION_NANO
 </SECTION>
 
 <SECTION>
@@ -85,13 +94,18 @@ NiceAgentClass
 NiceCandidate
 NiceCandidateType
 NiceCandidateTransport
-TurnServer
 NiceRelayType
 NICE_CANDIDATE_MAX_FOUNDATION
+NICE_CANDIDATE_MAX_TURN_SERVERS
+NICE_CANDIDATE_MAX_LOCAL_ADDRESSES
 nice_candidate_new
 nice_candidate_free
 nice_candidate_copy
 nice_candidate_equal_target
+nice_candidate_transport_to_string
+nice_candidate_type_to_string
+nice_candidate_relay_address
+nice_candidate_stun_server_address
 <SUBSECTION Standard>
 NICE_TYPE_CANDIDATE
 nice_candidate_get_type
@@ -113,6 +127,7 @@ NICE_CANDIDATE_DIRECTION_MS_PREF_ACTIVE
 NICE_CANDIDATE_DIRECTION_MS_PREF_PASSIVE
 NICE_CANDIDATE_TRANSPORT_MS_PREF_TCP
 NICE_CANDIDATE_TRANSPORT_MS_PREF_UDP
+TurnServer
 </SECTION>
 
 <SECTION>
@@ -134,9 +149,14 @@ nice_address_copy_to_sockaddr
 nice_address_equal
 nice_address_equal_no_port
 nice_address_to_string
+nice_address_dup_string
 nice_address_is_private
+nice_address_is_linklocal
 nice_address_is_valid
 nice_address_ip_version
+<SUBSECTION Standard>
+NICE_TYPE_ADDRESS
+nice_address_get_type
 </SECTION>
 
 
@@ -153,6 +173,7 @@ nice_debug_disable
 nice_interfaces_get_ip_for_interface
 nice_interfaces_get_local_interfaces
 nice_interfaces_get_local_ips
+nice_interfaces_get_if_index_by_addr
 </SECTION>
 
 <SECTION>

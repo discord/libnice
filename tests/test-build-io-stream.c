@@ -42,6 +42,8 @@
 
 #include "iostream.h"
 
+#include "test-io-stream-common.h"
+
 static void
 test_invalid_stream (NiceAddress *addr)
 {
@@ -49,12 +51,13 @@ test_invalid_stream (NiceAddress *addr)
   GIOStream *io_stream;
 
   agent = nice_agent_new_reliable (NULL, NICE_COMPATIBILITY_RFC5245);
+  g_object_set (G_OBJECT (agent), "upnp", FALSE, NULL);
   nice_agent_add_local_address (agent, addr);
 
   /* Try building an I/O stream for an invalid stream. All its operations should
    * return G_IO_ERROR_BROKEN_PIPE. */
   io_stream = nice_agent_get_io_stream (agent, 5, 5);
-  g_assert (io_stream == NULL);
+  g_assert_true (io_stream == NULL);
 
   g_object_unref (agent);
 }
@@ -69,42 +72,43 @@ test_io_stream_properties (NiceAddress *addr)
   GOutputStream *output_stream;
 
   agent = nice_agent_new_reliable (NULL, NICE_COMPATIBILITY_RFC5245);
+  g_object_set (G_OBJECT (agent), "upnp", FALSE, NULL);
   nice_agent_add_local_address (agent, addr);
 
   stream_id = nice_agent_add_stream (agent, 1);
 
   /* Try building an I/O stream around it. */
   io_stream = nice_agent_get_io_stream (agent, stream_id, 1);
-  g_assert (G_IS_IO_STREAM (io_stream));
-  g_assert (NICE_IS_IO_STREAM (io_stream));
+  g_assert_true (G_IS_IO_STREAM (io_stream));
+  g_assert_true (NICE_IS_IO_STREAM (io_stream));
 
   /* Check various initial properties. */
-  g_assert (!g_io_stream_is_closed (G_IO_STREAM (io_stream)));
-  g_assert (!g_io_stream_has_pending (G_IO_STREAM (io_stream)));
+  g_assert_true (!g_io_stream_is_closed (G_IO_STREAM (io_stream)));
+  g_assert_true (!g_io_stream_has_pending (G_IO_STREAM (io_stream)));
 
   /* Check the input stream’s properties. */
   input_stream = g_io_stream_get_input_stream (G_IO_STREAM (io_stream));
-  g_assert (G_IS_INPUT_STREAM (input_stream));
-  g_assert (NICE_IS_INPUT_STREAM (input_stream));
+  g_assert_true (G_IS_INPUT_STREAM (input_stream));
+  g_assert_true (NICE_IS_INPUT_STREAM (input_stream));
 
-  g_assert (!g_input_stream_is_closed (input_stream));
-  g_assert (!g_input_stream_has_pending (input_stream));
+  g_assert_true (!g_input_stream_is_closed (input_stream));
+  g_assert_true (!g_input_stream_has_pending (input_stream));
 
   /* Check the output stream’s properties. */
   output_stream = g_io_stream_get_output_stream (G_IO_STREAM (io_stream));
-  g_assert (G_IS_OUTPUT_STREAM (output_stream));
-  g_assert (NICE_IS_OUTPUT_STREAM (output_stream));
+  g_assert_true (G_IS_OUTPUT_STREAM (output_stream));
+  g_assert_true (NICE_IS_OUTPUT_STREAM (output_stream));
 
-  g_assert (!g_output_stream_is_closing (output_stream));
-  g_assert (!g_output_stream_is_closed (output_stream));
-  g_assert (!g_output_stream_has_pending (output_stream));
+  g_assert_true (!g_output_stream_is_closing (output_stream));
+  g_assert_true (!g_output_stream_is_closed (output_stream));
+  g_assert_true (!g_output_stream_has_pending (output_stream));
 
   /* Remove the component and check that the I/O streams close. */
   nice_agent_remove_stream (agent, stream_id);
 
-  g_assert (g_io_stream_is_closed (G_IO_STREAM (io_stream)));
-  g_assert (g_input_stream_is_closed (input_stream));
-  g_assert (g_output_stream_is_closed (output_stream));
+  g_assert_true (g_io_stream_is_closed (G_IO_STREAM (io_stream)));
+  g_assert_true (g_input_stream_is_closed (input_stream));
+  g_assert_true (g_output_stream_is_closed (output_stream));
 
   g_object_unref (io_stream);
   g_object_unref (agent);
@@ -125,6 +129,7 @@ test_pollable_properties (NiceAddress *addr)
   GSource *stream_source;
 
   agent = nice_agent_new_reliable (NULL, NICE_COMPATIBILITY_RFC5245);
+  g_object_set (G_OBJECT (agent), "upnp", FALSE, NULL);
   nice_agent_add_local_address (agent, addr);
 
   /* Add a stream. */
@@ -132,18 +137,18 @@ test_pollable_properties (NiceAddress *addr)
 
   /* Try building an I/O stream around it. */
   io_stream = nice_agent_get_io_stream (agent, stream_id, 1);
-  g_assert (G_IS_IO_STREAM (io_stream));
-  g_assert (NICE_IS_IO_STREAM (io_stream));
+  g_assert_true (G_IS_IO_STREAM (io_stream));
+  g_assert_true (NICE_IS_IO_STREAM (io_stream));
 
   /* Check the input stream’s properties. */
   input_stream = g_io_stream_get_input_stream (G_IO_STREAM (io_stream));
-  g_assert (G_IS_POLLABLE_INPUT_STREAM (input_stream));
+  g_assert_true (G_IS_POLLABLE_INPUT_STREAM (input_stream));
   pollable_input_stream = G_POLLABLE_INPUT_STREAM (input_stream);
 
-  g_assert (g_pollable_input_stream_can_poll (pollable_input_stream));
-  g_assert (!g_pollable_input_stream_is_readable (pollable_input_stream));
+  g_assert_true (g_pollable_input_stream_can_poll (pollable_input_stream));
+  g_assert_true (!g_pollable_input_stream_is_readable (pollable_input_stream));
 
-  g_assert (
+  g_assert_true (
       g_pollable_input_stream_read_nonblocking (pollable_input_stream,
           buf, sizeof (buf), NULL, &error) == -1);
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_WOULD_BLOCK);
@@ -151,18 +156,18 @@ test_pollable_properties (NiceAddress *addr)
 
   stream_source =
       g_pollable_input_stream_create_source (pollable_input_stream, NULL);
-  g_assert (stream_source != NULL);
+  g_assert_true (stream_source != NULL);
   g_source_unref (stream_source);
 
   /* Check the output stream’s properties. */
   output_stream = g_io_stream_get_output_stream (G_IO_STREAM (io_stream));
-  g_assert (G_IS_POLLABLE_OUTPUT_STREAM (output_stream));
+  g_assert_true (G_IS_POLLABLE_OUTPUT_STREAM (output_stream));
   pollable_output_stream = G_POLLABLE_OUTPUT_STREAM (output_stream);
 
-  g_assert (g_pollable_output_stream_can_poll (pollable_output_stream));
-  g_assert (!g_pollable_output_stream_is_writable (pollable_output_stream));
+  g_assert_true (g_pollable_output_stream_can_poll (pollable_output_stream));
+  g_assert_true (!g_pollable_output_stream_is_writable (pollable_output_stream));
 
-  g_assert (
+  g_assert_true (
       g_pollable_output_stream_write_nonblocking (pollable_output_stream,
           buf, sizeof (buf), NULL, &error) == -1);
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_WOULD_BLOCK);
@@ -170,21 +175,21 @@ test_pollable_properties (NiceAddress *addr)
 
   stream_source =
       g_pollable_output_stream_create_source (pollable_output_stream, NULL);
-  g_assert (stream_source != NULL);
+  g_assert_true (stream_source != NULL);
   g_source_unref (stream_source);
 
   /* Remove the component and check that the I/O streams close. */
   nice_agent_remove_stream (agent, stream_id);
 
-  g_assert (!g_pollable_input_stream_is_readable (pollable_input_stream));
-  g_assert (!g_pollable_output_stream_is_writable (pollable_output_stream));
+  g_assert_true (!g_pollable_input_stream_is_readable (pollable_input_stream));
+  g_assert_true (!g_pollable_output_stream_is_writable (pollable_output_stream));
 
-  g_assert (
+  g_assert_true (
       g_pollable_input_stream_read_nonblocking (pollable_input_stream,
           buf, sizeof (buf), NULL, &error) == 0);
   g_assert_no_error (error);
 
-  g_assert (
+  g_assert_true (
       g_pollable_output_stream_write_nonblocking (pollable_output_stream,
           buf, sizeof (buf), NULL, &error) == -1);
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_CLOSED);
@@ -212,11 +217,11 @@ source_cancelled_cb (GObject *pollable_stream, gpointer user_data)
   /* Try and check that the callback was invoked due to cancellation rather than
    * a poll() event on the socket itself. */
   if (G_IS_POLLABLE_INPUT_STREAM (pollable_stream)) {
-    g_assert (
+    g_assert_true (
         !g_pollable_input_stream_is_readable (
             G_POLLABLE_INPUT_STREAM (pollable_stream)));
   } else {
-    g_assert (
+    g_assert_true (
         !g_pollable_output_stream_is_writable (
             G_POLLABLE_OUTPUT_STREAM (pollable_stream)));
   }
@@ -251,7 +256,7 @@ check_pollable_source_cancellation (GSource *pollable_source,
   main_loop = g_main_loop_new (main_context, FALSE);
 
   /* Set up the pollable source. */
-  g_source_set_callback (pollable_source, (GSourceFunc) source_cancelled_cb,
+  g_source_set_callback (pollable_source, G_SOURCE_FUNC (source_cancelled_cb),
       main_loop, NULL);
   g_source_attach (pollable_source, main_context);
 
@@ -273,7 +278,7 @@ check_pollable_source_cancellation (GSource *pollable_source,
    * is cancelled. */
   g_main_loop_run (main_loop);
 
-  g_assert (g_cancellable_is_cancelled (cancellable));
+  g_assert_true (g_cancellable_is_cancelled (cancellable));
 
   g_main_loop_unref (main_loop);
   g_main_context_unref (main_context);
@@ -295,6 +300,7 @@ test_pollable_cancellation (NiceAddress *addr)
   GCancellable *cancellable;
 
   agent = nice_agent_new_reliable (NULL, NICE_COMPATIBILITY_RFC5245);
+  g_object_set (G_OBJECT (agent), "upnp", FALSE, NULL);
   nice_agent_add_local_address (agent, addr);
 
   /* Add a stream. */
@@ -302,16 +308,16 @@ test_pollable_cancellation (NiceAddress *addr)
 
   /* Try building an I/O stream around it. */
   io_stream = nice_agent_get_io_stream (agent, stream_id, 1);
-  g_assert (G_IS_IO_STREAM (io_stream));
-  g_assert (NICE_IS_IO_STREAM (io_stream));
+  g_assert_true (G_IS_IO_STREAM (io_stream));
+  g_assert_true (NICE_IS_IO_STREAM (io_stream));
 
   /* Grab the input and output streams. */
   input_stream = g_io_stream_get_input_stream (G_IO_STREAM (io_stream));
-  g_assert (G_IS_POLLABLE_INPUT_STREAM (input_stream));
+  g_assert_true (G_IS_POLLABLE_INPUT_STREAM (input_stream));
   pollable_input_stream = G_POLLABLE_INPUT_STREAM (input_stream);
 
   output_stream = g_io_stream_get_output_stream (G_IO_STREAM (io_stream));
-  g_assert (G_IS_POLLABLE_OUTPUT_STREAM (output_stream));
+  g_assert_true (G_IS_POLLABLE_OUTPUT_STREAM (output_stream));
   pollable_output_stream = G_POLLABLE_OUTPUT_STREAM (output_stream);
 
   /* Check the non-blocking read() and write() return immediately if called with
@@ -319,13 +325,13 @@ test_pollable_cancellation (NiceAddress *addr)
   cancellable = g_cancellable_new ();
   g_cancellable_cancel (cancellable);
 
-  g_assert (
+  g_assert_true (
       g_pollable_input_stream_read_nonblocking (pollable_input_stream,
           buf, sizeof (buf), cancellable, &error) == -1);
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_CANCELLED);
   g_clear_error (&error);
 
-  g_assert (
+  g_assert_true (
       g_pollable_output_stream_write_nonblocking (pollable_output_stream,
           buf, sizeof (buf), cancellable, &error) == -1);
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_CANCELLED);
@@ -373,6 +379,7 @@ test_zero_length_reads_writes (NiceAddress *addr)
   guint8 buf[1];  /* should never be accessed */
 
   agent = nice_agent_new_reliable (NULL, NICE_COMPATIBILITY_RFC5245);
+  g_object_set (G_OBJECT (agent), "upnp", FALSE, NULL);
   nice_agent_add_local_address (agent, addr);
 
   /* Add a stream. */
@@ -380,8 +387,8 @@ test_zero_length_reads_writes (NiceAddress *addr)
 
   /* Try building an I/O stream around it. */
   io_stream = nice_agent_get_io_stream (agent, stream_id, 1);
-  g_assert (G_IS_IO_STREAM (io_stream));
-  g_assert (NICE_IS_IO_STREAM (io_stream));
+  g_assert_true (G_IS_IO_STREAM (io_stream));
+  g_assert_true (NICE_IS_IO_STREAM (io_stream));
 
   input_stream = g_io_stream_get_input_stream (G_IO_STREAM (io_stream));
   output_stream = g_io_stream_get_output_stream (G_IO_STREAM (io_stream));
@@ -389,18 +396,18 @@ test_zero_length_reads_writes (NiceAddress *addr)
   pollable_output_stream = G_POLLABLE_OUTPUT_STREAM (output_stream);
 
   /* Check zero-length reads and writes complete immediately without error. */
-  g_assert (g_input_stream_read (input_stream, buf, 0, NULL, &error) == 0);
+  g_assert_cmpint (g_input_stream_read (input_stream, buf, 0, NULL, &error), ==, 0);
   g_assert_no_error (error);
 
-  g_assert (g_output_stream_write (output_stream, buf, 0, NULL, &error) == 0);
+  g_assert_cmpint (g_output_stream_write (output_stream, buf, 0, NULL, &error), ==, 0);
   g_assert_no_error (error);
 
-  g_assert (
+  g_assert_true (
       g_pollable_input_stream_read_nonblocking (pollable_input_stream,
           buf, 0, NULL, &error) == 0);
   g_assert_no_error (error);
 
-  g_assert (
+  g_assert_true (
       g_pollable_output_stream_write_nonblocking (pollable_output_stream,
           buf, 0, NULL, &error) == 0);
   g_assert_no_error (error);
@@ -408,20 +415,20 @@ test_zero_length_reads_writes (NiceAddress *addr)
   /* Remove the component and check that zero-length reads and writes still
    * result in a 0 response, rather than any error. */
   nice_agent_remove_stream (agent, stream_id);
-  g_assert (g_io_stream_is_closed (G_IO_STREAM (io_stream)));
+  g_assert_true (g_io_stream_is_closed (G_IO_STREAM (io_stream)));
 
-  g_assert (g_input_stream_read (input_stream, buf, 0, NULL, &error) == 0);
+  g_assert_cmpint (g_input_stream_read (input_stream, buf, 0, NULL, &error), ==, 0);
   g_assert_no_error (error);
 
-  g_assert (g_output_stream_write (output_stream, buf, 0, NULL, &error) == 0);
+  g_assert_cmpint (g_output_stream_write (output_stream, buf, 0, NULL, &error), ==, 0);
   g_assert_no_error (error);
 
-  g_assert (
+  g_assert_true (
       g_pollable_input_stream_read_nonblocking (pollable_input_stream,
           buf, 0, NULL, &error) == 0);
   g_assert_no_error (error);
 
-  g_assert (
+  g_assert_true (
       g_pollable_output_stream_write_nonblocking (pollable_output_stream,
           buf, 0, NULL, &error) == 0);
   g_assert_no_error (error);
@@ -441,7 +448,7 @@ main (void)
 #endif
   nice_address_init (&addr);
 
-  g_assert (nice_address_set_from_string (&addr, "127.0.0.1"));
+  g_assert_true (nice_address_set_from_string (&addr, "127.0.0.1"));
 
   test_invalid_stream (&addr);
   test_io_stream_properties (&addr);

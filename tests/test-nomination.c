@@ -6,6 +6,8 @@
 #include <gio/gnetworking.h>
 #include <agent.h>
 
+#include "test-common.h"
+
 static NiceComponentState global_lagent_state[2] = { NICE_COMPONENT_STATE_LAST, NICE_COMPONENT_STATE_LAST };
 static NiceComponentState global_ragent_state[2] = { NICE_COMPONENT_STATE_LAST, NICE_COMPONENT_STATE_LAST };
 static guint global_components_ready = 0;
@@ -77,7 +79,7 @@ static void cb_component_state_changed (NiceAgent *agent, guint stream_id, guint
     global_components_ready++;
   else if (state == NICE_COMPONENT_STATE_CONNECTED && ready_to_connected)
     global_components_ready--;
-  g_assert (state != NICE_COMPONENT_STATE_FAILED);
+  g_assert_true (state != NICE_COMPONENT_STATE_FAILED);
 
   g_debug ("test-nomination: checks READY %u.", global_components_ready);
 }
@@ -104,21 +106,6 @@ static void set_candidates (NiceAgent *from, guint from_stream,
   for (i = cands; i; i = i->next)
     nice_candidate_free ((NiceCandidate *) i->data);
   g_slist_free (cands);
-}
-
-static void set_credentials (NiceAgent *lagent, guint lstream,
-    NiceAgent *ragent, guint rstream)
-{
-  gchar *ufrag = NULL, *password = NULL;
-
-  nice_agent_get_local_credentials(lagent, lstream, &ufrag, &password);
-  nice_agent_set_remote_credentials (ragent, rstream, ufrag, password);
-  g_free (ufrag);
-  g_free (password);
-  nice_agent_get_local_credentials(ragent, rstream, &ufrag, &password);
-  nice_agent_set_remote_credentials (lagent, lstream, ufrag, password);
-  g_free (ufrag);
-  g_free (password);
 }
 
 static void
@@ -182,12 +169,12 @@ run_test(NiceNominationMode l_nomination_mode,
 
   ls_id = nice_agent_add_stream (lagent, 1);
   rs_id = nice_agent_add_stream (ragent, 1);
-  g_assert (ls_id > 0);
-  g_assert (rs_id > 0);
+  g_assert_cmpuint (ls_id, >, 0);
+  g_assert_cmpuint (rs_id, >, 0);
 
   /* Gather candidates and test nice_agent_set_port_range */
-  g_assert (nice_agent_gather_candidates (lagent, ls_id) == TRUE);
-  g_assert (nice_agent_gather_candidates (ragent, rs_id) == TRUE);
+  g_assert_true (nice_agent_gather_candidates (lagent, ls_id) == TRUE);
+  g_assert_true (nice_agent_gather_candidates (ragent, rs_id) == TRUE);
 
   nice_agent_attach_recv (lagent, ls_id, NICE_COMPONENT_TYPE_RTP,
       g_main_context_default (), cb_nice_recv, GUINT_TO_POINTER (1));
@@ -197,12 +184,12 @@ run_test(NiceNominationMode l_nomination_mode,
   g_debug ("test-nomination: Added streams, running context until 'candidate-gathering-done'...");
   while (!global_lagent_gathering_done)
     g_main_context_iteration (NULL, TRUE);
-  g_assert (global_lagent_gathering_done == TRUE);
+  g_assert_true (global_lagent_gathering_done == TRUE);
   while (!global_ragent_gathering_done)
     g_main_context_iteration (NULL, TRUE);
-  g_assert (global_ragent_gathering_done == TRUE);
+  g_assert_true (global_ragent_gathering_done == TRUE);
 
-  set_credentials (lagent, ls_id, ragent, rs_id);
+  test_common_set_credentials (lagent, ls_id, ragent, rs_id);
 
   set_candidates (ragent, rs_id, lagent, ls_id, NICE_COMPONENT_TYPE_RTP);
   set_candidates (lagent, ls_id, ragent, rs_id, NICE_COMPONENT_TYPE_RTP);
@@ -210,8 +197,8 @@ run_test(NiceNominationMode l_nomination_mode,
   while (global_lagent_state[0] != NICE_COMPONENT_STATE_READY ||
       global_ragent_state[0] != NICE_COMPONENT_STATE_READY)
     g_main_context_iteration (NULL, TRUE);
-  g_assert (global_lagent_state[0] == NICE_COMPONENT_STATE_READY);
-  g_assert (global_ragent_state[0] == NICE_COMPONENT_STATE_READY);
+  g_assert_cmpint (global_lagent_state[0], ==, NICE_COMPONENT_STATE_READY);
+  g_assert_cmpint (global_ragent_state[0], ==, NICE_COMPONENT_STATE_READY);
 
   nice_agent_remove_stream (lagent, ls_id);
   nice_agent_remove_stream (ragent, rs_id);

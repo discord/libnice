@@ -39,6 +39,7 @@
 #endif
 
 #include "agent.h"
+#include "test-common.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -296,6 +297,15 @@ static void cb_initial_binding_request_received(NiceAgent *agent, guint stream_i
   (void)agent; (void)stream_id; (void)data;
 }
 
+static void cb_closed (GObject *src, GAsyncResult *result, gpointer data)
+{
+  NiceAgent *agent = NICE_AGENT (src);
+
+  g_debug ("test-fullmode:%s: %p", G_STRFUNC, agent);
+
+  *((gboolean *)data) = TRUE;
+}
+
 static void set_candidates (NiceAgent *from, guint from_stream,
     NiceAgent *to, guint to_stream, guint component, gboolean remove_non_relay)
 {
@@ -320,25 +330,33 @@ static void set_candidates (NiceAgent *from, guint from_stream,
   g_slist_free (cands);
 }
 
-static void set_credentials (NiceAgent *lagent, guint lstream,
-    NiceAgent *ragent, guint rstream)
+static guint16
+get_port (NiceAgent *agent, guint stream_id, guint component_id)
 {
-  gchar *ufrag = NULL, *password = NULL;
+  GSList *cands = nice_agent_get_local_candidates (agent, stream_id,
+      component_id);
+  GSList *item;
+  guint16 port = 0;
 
-  nice_agent_get_local_credentials(lagent, lstream, &ufrag, &password);
-  nice_agent_set_remote_credentials (ragent, rstream, ufrag, password);
-  g_free (ufrag);
-  g_free (password);
-  nice_agent_get_local_credentials(ragent, rstream, &ufrag, &password);
-  nice_agent_set_remote_credentials (lagent, lstream, ufrag, password);
-  g_free (ufrag);
-  g_free (password);
+  g_assert_true (cands != NULL);
+
+  for (item = cands; item; item = item->next) {
+    NiceCandidate *cand = item->data;
+    port = nice_address_get_port (&cand->addr);
+    break;
+  }
+  g_assert_true (port != 0);
+
+  g_slist_free_full (cands, (GDestroyNotify) nice_candidate_free);
+
+  return port;
 }
 
 static int run_full_test (NiceAgent *lagent, NiceAgent *ragent, NiceAddress *baseaddr, guint ready, guint failed)
 {
   guint ls_id, rs_id;
   gint ret;
+  guint16 port;
 
   /* XXX: dear compiler, this is for you */
   (void)baseaddr;
@@ -362,8 +380,8 @@ static int run_full_test (NiceAgent *lagent, NiceAgent *ragent, NiceAddress *bas
   ls_id = nice_agent_add_stream (lagent, 2);
 
   rs_id = nice_agent_add_stream (ragent, 2);
-  g_assert (ls_id > 0);
-  g_assert (rs_id > 0);
+  g_assert_cmpuint (ls_id, >, 0);
+  g_assert_cmpuint (rs_id, >, 0);
 #if USE_TURN
   nice_agent_set_relay_info(lagent, ls_id, 1,
       TURN_IP, TURN_PORT, TURN_USER, TURN_PASS, TURN_TYPE);
@@ -377,16 +395,22 @@ static int run_full_test (NiceAgent *lagent, NiceAgent *ragent, NiceAddress *bas
 
 
   /* Gather candidates and test nice_agent_set_port_range */
-  nice_agent_set_port_range (lagent, ls_id, 1, 10000, 10000);
-  nice_agent_set_port_range (lagent, ls_id, 2, 10001, 10001);
-  nice_agent_set_port_range (ragent, rs_id, 1, 12345, 12345);
-  nice_agent_set_port_range (ragent, rs_id, 2, 10000, 10001);
-  g_assert (nice_agent_gather_candidates (lagent, ls_id) == TRUE);
-  g_assert (nice_agent_gather_candidates (ragent, rs_id) == FALSE);
-  g_assert (nice_agent_get_local_candidates (ragent, rs_id, 1) == NULL);
-  g_assert (nice_agent_get_local_candidates (ragent, rs_id, 2) == NULL);
-  nice_agent_set_port_range (ragent, rs_id, 2, 10000, 10002);
-  g_assert (nice_agent_gather_candidates (ragent, rs_id) == TRUE);
+  for (port = 10000; port < 60000; port++) {
+    nice_agent_set_port_range (lagent, ls_id, 1, port, port);
+    if (nice_agent_gather_candidates (lagent, ls_id))
+      break;
+  }
+
+  g_assert_cmpuint (port, ==, get_port (lagent, ls_id, 1));
+
+  nice_agent_set_port_range (ragent, rs_id, 2, port, port);
+
+  g_assert_true (nice_agent_gather_candidates (ragent, rs_id) == FALSE);
+  g_assert_true (nice_agent_get_local_candidates (ragent, rs_id, 1) == NULL);
+  g_assert_true (nice_agent_get_local_candidates (ragent, rs_id, 2) == NULL);
+  nice_agent_set_port_range (ragent, rs_id, 2, 0, 0);
+  g_assert_true (nice_agent_gather_candidates (lagent, ls_id) == TRUE);
+  g_assert_true (nice_agent_gather_candidates (ragent, rs_id) == TRUE);
 
 #if USE_LOOPBACK
   {
@@ -394,37 +418,33 @@ static int run_full_test (NiceAgent *lagent, NiceAgent *ragent, NiceAddress *bas
     NiceCandidate *cand = NULL;
 
     cands = nice_agent_get_local_candidates (lagent, ls_id, 1);
-    g_assert (g_slist_length (cands) == 1);
+    g_assert_cmpuint (g_slist_length (cands), ==, 1);
     cand = cands->data;
-    g_assert (cand->type == NICE_CANDIDATE_TYPE_HOST);
-    g_assert (nice_address_get_port (&cand->addr) == 10000);
+    g_assert_cmpint (cand->type, ==, NICE_CANDIDATE_TYPE_HOST);
     for (i = cands; i; i = i->next)
       nice_candidate_free ((NiceCandidate *) i->data);
     g_slist_free (cands);
 
     cands = nice_agent_get_local_candidates (lagent, ls_id, 2);
-    g_assert (g_slist_length (cands) == 1);
+    g_assert_cmpuint (g_slist_length (cands), ==, 1);
     cand = cands->data;
-    g_assert (cand->type == NICE_CANDIDATE_TYPE_HOST);
-    g_assert (nice_address_get_port (&cand->addr) == 10001);
+    g_assert_cmpint (cand->type, ==, NICE_CANDIDATE_TYPE_HOST);
     for (i = cands; i; i = i->next)
       nice_candidate_free ((NiceCandidate *) i->data);
     g_slist_free (cands);
 
     cands = nice_agent_get_local_candidates (ragent, rs_id, 1);
-    g_assert (g_slist_length (cands) == 1);
+    g_assert_cmpuint (g_slist_length (cands), ==, 1);
     cand = cands->data;
-    g_assert (cand->type == NICE_CANDIDATE_TYPE_HOST);
-    g_assert (nice_address_get_port (&cand->addr) == 12345);
+    g_assert_cmpint (cand->type, ==, NICE_CANDIDATE_TYPE_HOST);
     for (i = cands; i; i = i->next)
       nice_candidate_free ((NiceCandidate *) i->data);
     g_slist_free (cands);
 
     cands = nice_agent_get_local_candidates (ragent, rs_id, 2);
-    g_assert (g_slist_length (cands) == 1);
+    g_assert_cmpuint (g_slist_length (cands), ==, 1);
     cand = cands->data;
-    g_assert (cand->type == NICE_CANDIDATE_TYPE_HOST);
-    g_assert (nice_address_get_port (&cand->addr) == 10002);
+    g_assert_cmpint (cand->type, ==, NICE_CANDIDATE_TYPE_HOST);
     for (i = cands; i; i = i->next)
       nice_candidate_free ((NiceCandidate *) i->data);
     g_slist_free (cands);
@@ -452,11 +472,11 @@ static int run_full_test (NiceAgent *lagent, NiceAgent *ragent, NiceAddress *bas
       global_ragent_gathering_done != TRUE) {
     g_debug ("test-fullmode: Added streams, running mainloop until 'candidate-gathering-done'...");
     g_main_loop_run (global_mainloop);
-    g_assert (global_lagent_gathering_done == TRUE);
-    g_assert (global_ragent_gathering_done == TRUE);
+    g_assert_true (global_lagent_gathering_done == TRUE);
+    g_assert_true (global_ragent_gathering_done == TRUE);
   }
 
-  set_credentials (lagent, ls_id, ragent, rs_id);
+  test_common_set_credentials (lagent, ls_id, ragent, rs_id);
 
   /* step: pass the remote candidates to agents  */
   set_candidates (ragent, rs_id, lagent, ls_id, NICE_COMPONENT_TYPE_RTP, USE_TURN);
@@ -471,8 +491,8 @@ static int run_full_test (NiceAgent *lagent, NiceAgent *ragent, NiceAddress *bas
   g_main_loop_run (global_mainloop);
 
   /* note: verify that STUN binding requests were sent */
-  g_assert (global_lagent_ibr_received == TRUE);
-  g_assert (global_ragent_ibr_received == TRUE);
+  g_assert_true (global_lagent_ibr_received == TRUE);
+  g_assert_true (global_ragent_ibr_received == TRUE);
 
   /* note: test payload send and receive */
   global_ragent_read = 0;
@@ -497,10 +517,10 @@ static int run_full_test (NiceAgent *lagent, NiceAgent *ragent, NiceAddress *bas
     }
   }
   g_debug ("Sent %d bytes", ret);
-  g_assert (ret == 16);
+  g_assert_cmpint (ret, ==, 16);
   while (global_ragent_read != 16)
     g_main_context_iteration (NULL, TRUE);
-  g_assert (global_ragent_read == 16);
+  g_assert_cmpint (global_ragent_read, ==, 16);
 
   g_debug ("test-fullmode: Ran mainloop, removing streams...");
 
@@ -545,8 +565,8 @@ static int run_full_test_delayed_answer (NiceAgent *lagent, NiceAgent *ragent, N
   ls_id = nice_agent_add_stream (lagent, 2);
 
   rs_id = nice_agent_add_stream (ragent, 2);
-  g_assert (ls_id > 0);
-  g_assert (rs_id > 0);
+  g_assert_cmpuint (ls_id, >, 0);
+  g_assert_cmpuint (rs_id, >, 0);
 
   /* We don't try this with TURN because as long as both agents don't
      have the remote candidates, they won't be able to create the
@@ -575,11 +595,11 @@ static int run_full_test_delayed_answer (NiceAgent *lagent, NiceAgent *ragent, N
       global_ragent_gathering_done != TRUE) {
     g_debug ("test-fullmode: Added streams, running mainloop until 'candidate-gathering-done'...");
     g_main_loop_run (global_mainloop);
-    g_assert (global_lagent_gathering_done == TRUE);
-    g_assert (global_ragent_gathering_done == TRUE);
+    g_assert_true (global_lagent_gathering_done == TRUE);
+    g_assert_true (global_ragent_gathering_done == TRUE);
   }
 
-  set_credentials (lagent, ls_id, ragent, rs_id);
+  test_common_set_credentials (lagent, ls_id, ragent, rs_id);
 
   /* step: set remote candidates for agent R (answering party) */
   /* We have to disable TURN for this test because with the delayed answer,
@@ -594,7 +614,7 @@ static int run_full_test_delayed_answer (NiceAgent *lagent, NiceAgent *ragent, N
   global_exit_when_ibr_received = 0;
 
   /* note: verify that STUN binding requests were sent */
-  g_assert (global_lagent_ibr_received == TRUE);
+  g_assert_true (global_lagent_ibr_received == TRUE);
 
   g_debug ("test-fullmode: Delayed answer received, continuing processing..");
 
@@ -605,8 +625,8 @@ static int run_full_test_delayed_answer (NiceAgent *lagent, NiceAgent *ragent, N
   g_debug ("test-fullmode: Running mainloop until connectivity checks succeeed.");
 
   g_main_loop_run (global_mainloop);
-  g_assert (global_ragent_ibr_received == TRUE);
-  g_assert (global_components_failed == 0);
+  g_assert_true (global_ragent_ibr_received == TRUE);
+  g_assert_cmpuint (global_components_failed, ==, 0);
 
   /* note: test payload send and receive */
   global_ragent_read = 0;
@@ -629,9 +649,9 @@ static int run_full_test_delayed_answer (NiceAgent *lagent, NiceAgent *ragent, N
     }
   }
   global_ragent_read = 0;
-  g_assert (ret == 16);
+  g_assert_cmpint (ret, ==, 16);
   g_main_loop_run (global_mainloop);
-  g_assert (global_ragent_read == 16);
+  g_assert_cmpint (global_ragent_read, ==, 16);
 
   g_debug ("test-fullmode: Ran mainloop, removing streams...");
 
@@ -669,8 +689,8 @@ static int run_full_test_wrong_password (NiceAgent *lagent, NiceAgent *ragent, N
   ls_id = nice_agent_add_stream (lagent, 1);
 
   rs_id = nice_agent_add_stream (ragent, 1);
-  g_assert (ls_id > 0);
-  g_assert (rs_id > 0);
+  g_assert_cmpuint (ls_id, >, 0);
+  g_assert_cmpuint (rs_id, >, 0);
 
 #if USE_TURN
   nice_agent_set_relay_info(lagent, ls_id, 1,
@@ -696,13 +716,13 @@ static int run_full_test_wrong_password (NiceAgent *lagent, NiceAgent *ragent, N
       global_ragent_gathering_done != TRUE) {
     g_debug ("test-fullmode: Added streams, running mainloop until 'candidate-gathering-done'...");
     g_main_loop_run (global_mainloop);
-    g_assert (global_lagent_gathering_done == TRUE);
-    g_assert (global_ragent_gathering_done == TRUE);
+    g_assert_true (global_lagent_gathering_done == TRUE);
+    g_assert_true (global_ragent_gathering_done == TRUE);
   }
 
   g_debug ("test-fullmode: Got local candidates...");
 
-  set_credentials (lagent, ls_id, ragent, rs_id);
+  test_common_set_credentials (lagent, ls_id, ragent, rs_id);
   nice_agent_set_remote_credentials (ragent, rs_id, "wrong", "password");
   nice_agent_set_remote_credentials (lagent, ls_id, "wrong2", "password2");
 
@@ -718,8 +738,8 @@ static int run_full_test_wrong_password (NiceAgent *lagent, NiceAgent *ragent, N
   g_main_loop_run (global_mainloop);
 
   /* note: verify that correct number of local candidates were reported */
-  g_assert (global_lagent_cands == 0);
-  g_assert (global_ragent_cands == 0);
+  g_assert_cmpint (global_lagent_cands, ==, 0);
+  g_assert_cmpint (global_ragent_cands, ==, 0);
 
   g_debug ("test-fullmode: Ran mainloop, removing streams...");
 
@@ -756,8 +776,8 @@ static int run_full_test_control_conflict (NiceAgent *lagent, NiceAgent *ragent,
   ls_id = nice_agent_add_stream (lagent, 1);
 
   rs_id = nice_agent_add_stream (ragent, 1);
-  g_assert (ls_id > 0);
-  g_assert (rs_id > 0);
+  g_assert_cmpuint (ls_id, >, 0);
+  g_assert_cmpuint (rs_id, >, 0);
 
 #if USE_TURN
   nice_agent_set_relay_info(lagent, ls_id, 1,
@@ -783,13 +803,13 @@ static int run_full_test_control_conflict (NiceAgent *lagent, NiceAgent *ragent,
       global_ragent_gathering_done != TRUE) {
     g_debug ("test-fullmode: Added streams, running mainloop until 'candidate-gathering-done'...");
     g_main_loop_run (global_mainloop);
-    g_assert (global_lagent_gathering_done == TRUE);
-    g_assert (global_ragent_gathering_done == TRUE);
+    g_assert_true (global_lagent_gathering_done == TRUE);
+    g_assert_true (global_ragent_gathering_done == TRUE);
   }
 
   g_debug ("test-fullmode: Got local candidates...");
 
-  set_credentials (lagent, ls_id, ragent, rs_id);
+  test_common_set_credentials (lagent, ls_id, ragent, rs_id);
 
   /* step: pass the remote candidates to agents  */
   set_candidates (ragent, rs_id, lagent, ls_id, NICE_COMPONENT_TYPE_RTP, USE_TURN);
@@ -807,8 +827,8 @@ static int run_full_test_control_conflict (NiceAgent *lagent, NiceAgent *ragent,
   */
 #if !(USE_TURN)
   /* note: verify that correct number of local candidates were reported */
-  g_assert (global_lagent_cands == 1);
-  g_assert (global_ragent_cands == 1);
+  g_assert_cmpint (global_lagent_cands, ==, 1);
+  g_assert_cmpint (global_ragent_cands, ==, 1);
 #endif
 
   g_debug ("test-fullmode: Ran mainloop, removing streams...");
@@ -828,6 +848,8 @@ int main (void)
   int result;
   guint timer_id;
   const char *stun_server = NULL, *stun_server_port = NULL;
+  gboolean lagent_closed = FALSE;
+  gboolean ragent_closed = FALSE;
 
 #ifdef G_OS_WIN32
   WSADATA w;
@@ -929,39 +951,39 @@ int main (void)
     guint port = 0;
     gboolean mode = FALSE;
     g_object_get (G_OBJECT (lagent), "stun-server", &string, NULL);
-    g_assert (stun_server == NULL || strcmp (string, stun_server) == 0);
+    g_assert_true (stun_server == NULL || strcmp (string, stun_server) == 0);
     g_free (string);
     g_object_get (G_OBJECT (lagent), "stun-server-port", &port, NULL);
-    g_assert (stun_server_port == NULL || port == (guint)atoi (stun_server_port));
+    g_assert_true (stun_server_port == NULL || port == (guint)atoi (stun_server_port));
     g_object_get (G_OBJECT (lagent), "proxy-ip", &string, NULL);
-    g_assert (strcmp (string, PROXY_IP) == 0);
+    g_assert_cmpstr (string, ==, PROXY_IP);
     g_free (string);
     g_object_get (G_OBJECT (lagent), "proxy-port", &port, NULL);
-    g_assert (port == PROXY_PORT);
+    g_assert_cmpuint (port, ==, PROXY_PORT);
     g_object_get (G_OBJECT (lagent), "controlling-mode", &mode, NULL);
-    g_assert (mode == TRUE);
+    g_assert_true (mode == TRUE);
     g_object_set (G_OBJECT (lagent), "max-connectivity-checks", 300, NULL);
     g_object_get (G_OBJECT (lagent), "max-connectivity-checks", &max_checks, NULL);
-    g_assert (max_checks == 300);
+    g_assert_cmpuint (max_checks, ==, 300);
   }
 
   /* step: run test the first time */
   g_debug ("test-fullmode: TEST STARTS / running test for the 1st time");
   result = run_full_test (lagent, ragent, &baseaddr, 4 ,0);
   priv_print_global_status ();
-  g_assert (result == 0);
-  g_assert (global_lagent_state[0] == NICE_COMPONENT_STATE_READY);
-  g_assert (global_lagent_state[1] == NICE_COMPONENT_STATE_READY);
-  g_assert (global_ragent_state[0] == NICE_COMPONENT_STATE_READY);
-  g_assert (global_ragent_state[1] == NICE_COMPONENT_STATE_READY);
+  g_assert_cmpint (result, ==, 0);
+  g_assert_cmpint (global_lagent_state[0], ==, NICE_COMPONENT_STATE_READY);
+  g_assert_cmpint (global_lagent_state[1], ==, NICE_COMPONENT_STATE_READY);
+  g_assert_cmpint (global_ragent_state[0], ==, NICE_COMPONENT_STATE_READY);
+  g_assert_cmpint (global_ragent_state[1], ==, NICE_COMPONENT_STATE_READY);
   /* When using TURN, we get peer reflexive candidates for the host cands
      that we removed so we can get another new_selected_pair signal later
      depending on timing/racing, we could double (or not) the amount we expected
   */
 #if !(USE_TURN)
   /* note: verify that correct number of local candidates were reported */
-    g_assert (global_lagent_cands == 2);
-    g_assert (global_ragent_cands == 2);
+    g_assert_cmpint (global_lagent_cands, ==, 2);
+    g_assert_cmpint (global_ragent_cands, ==, 2);
 #endif
 
 
@@ -969,19 +991,19 @@ int main (void)
   g_debug ("test-fullmode: TEST STARTS / running test for the 2nd time");
   result = run_full_test (lagent, ragent, &baseaddr, 4, 0);
   priv_print_global_status ();
-  g_assert (result == 0);
-  g_assert (global_lagent_state[0] == NICE_COMPONENT_STATE_READY);
-  g_assert (global_lagent_state[1] == NICE_COMPONENT_STATE_READY);
-  g_assert (global_ragent_state[0] == NICE_COMPONENT_STATE_READY);
-  g_assert (global_ragent_state[1] == NICE_COMPONENT_STATE_READY);
+  g_assert_cmpint (result, ==, 0);
+  g_assert_cmpint (global_lagent_state[0], ==, NICE_COMPONENT_STATE_READY);
+  g_assert_cmpint (global_lagent_state[1], ==, NICE_COMPONENT_STATE_READY);
+  g_assert_cmpint (global_ragent_state[0], ==, NICE_COMPONENT_STATE_READY);
+  g_assert_cmpint (global_ragent_state[1], ==, NICE_COMPONENT_STATE_READY);
   /* When using TURN, we get peer reflexive candidates for the host cands
      that we removed so we can get another new_selected_pair signal later
      depending on timing/racing, we could double (or not) the amount we expected
   */
 #if !(USE_TURN)
   /* note: verify that correct number of local candidates were reported */
-  g_assert (global_lagent_cands == 2);
-  g_assert (global_ragent_cands == 2);
+  g_assert_cmpint (global_lagent_cands, ==, 2);
+  g_assert_cmpint (global_ragent_cands, ==, 2);
 #endif
 
 
@@ -989,19 +1011,19 @@ int main (void)
   g_debug ("test-fullmode: TEST STARTS / delayed SDP answer");
   result = run_full_test_delayed_answer (lagent, ragent, &baseaddr, 4, 0);
   priv_print_global_status ();
-  g_assert (result == 0);
-  g_assert (global_lagent_state[0] == NICE_COMPONENT_STATE_READY);
-  g_assert (global_lagent_state[1] == NICE_COMPONENT_STATE_READY);
-  g_assert (global_ragent_state[0] == NICE_COMPONENT_STATE_READY);
-  g_assert (global_ragent_state[1] == NICE_COMPONENT_STATE_READY);
+  g_assert_cmpint (result, ==, 0);
+  g_assert_cmpint (global_lagent_state[0], ==, NICE_COMPONENT_STATE_READY);
+  g_assert_cmpint (global_lagent_state[1], ==, NICE_COMPONENT_STATE_READY);
+  g_assert_cmpint (global_ragent_state[0], ==, NICE_COMPONENT_STATE_READY);
+  g_assert_cmpint (global_ragent_state[1], ==, NICE_COMPONENT_STATE_READY);
   /* note: verify that correct number of local candidates were reported */
   /* When using TURN, we get peer reflexive candidates for the host cands
      that we removed so we can get another new_selected_pair signal later
      depending on timing/racing, we could double (or not) the amount we expected
   */
 #if !(USE_TURN)
-  g_assert (global_lagent_cands == 2);
-  g_assert (global_ragent_cands == 2);
+  g_assert_cmpint (global_lagent_cands, ==, 2);
+  g_assert_cmpint (global_ragent_cands, ==, 2);
 #endif
 
 #if TEST_GOOGLE
@@ -1012,11 +1034,11 @@ int main (void)
   g_debug ("test-fullmode: TEST STARTS / incorrect credentials");
   result = run_full_test_wrong_password (lagent, ragent, &baseaddr);
   priv_print_global_status ();
-  g_assert (result == 0);
-  g_assert (global_lagent_state[0] == NICE_COMPONENT_STATE_FAILED);
-  g_assert (global_lagent_state[1] == NICE_COMPONENT_STATE_LAST);
-  g_assert (global_ragent_state[0] == NICE_COMPONENT_STATE_FAILED);
-  g_assert (global_ragent_state[1] == NICE_COMPONENT_STATE_LAST);
+  g_assert_cmpint (result, ==, 0);
+  g_assert_cmpint (global_lagent_state[0], ==, NICE_COMPONENT_STATE_FAILED);
+  g_assert_cmpint (global_lagent_state[1], ==, NICE_COMPONENT_STATE_LAST);
+  g_assert_cmpint (global_ragent_state[0], ==, NICE_COMPONENT_STATE_FAILED);
+  g_assert_cmpint (global_ragent_state[1], ==, NICE_COMPONENT_STATE_LAST);
 
   /* The max connectivity checks test can't be run with TURN because
      we'll have 3 local candidates instead of 1 and the checks will
@@ -1029,11 +1051,11 @@ int main (void)
   g_object_set (G_OBJECT (ragent), "max-connectivity-checks", 1, NULL);
   result = run_full_test (lagent, ragent, &baseaddr, 2, 2);
   priv_print_global_status ();
-  g_assert (result == 0);
+  g_assert_cmpint (result, ==, 0);
   /* should FAIL as agent L can't send any checks: */
-  g_assert (global_lagent_state[0] == NICE_COMPONENT_STATE_FAILED ||
+  g_assert_true (global_lagent_state[0] == NICE_COMPONENT_STATE_FAILED ||
 	    global_lagent_state[1] == NICE_COMPONENT_STATE_FAILED);
-  g_assert (global_lagent_state[0] == NICE_COMPONENT_STATE_FAILED ||
+  g_assert_true (global_lagent_state[0] == NICE_COMPONENT_STATE_FAILED ||
 	    global_lagent_state[1] == NICE_COMPONENT_STATE_FAILED);
 #endif
 
@@ -1042,14 +1064,14 @@ int main (void)
   result = run_full_test (lagent, ragent, &baseaddr, 4, 0);
   priv_print_global_status ();
   /* should SUCCEED as agent L can send the checks: */
-  g_assert (result == 0);
-  g_assert (global_lagent_state[0] == NICE_COMPONENT_STATE_CONNECTED ||
+  g_assert_cmpint (result, ==, 0);
+  g_assert_true (global_lagent_state[0] == NICE_COMPONENT_STATE_CONNECTED ||
       global_lagent_state[0] == NICE_COMPONENT_STATE_READY);
-  g_assert (global_lagent_state[1] == NICE_COMPONENT_STATE_CONNECTED ||
+  g_assert_true (global_lagent_state[1] == NICE_COMPONENT_STATE_CONNECTED ||
       global_lagent_state[1] == NICE_COMPONENT_STATE_READY);
-  g_assert (global_ragent_state[0] == NICE_COMPONENT_STATE_CONNECTED ||
+  g_assert_true (global_ragent_state[0] == NICE_COMPONENT_STATE_CONNECTED ||
       global_ragent_state[0] == NICE_COMPONENT_STATE_READY);
-  g_assert (global_ragent_state[1] == NICE_COMPONENT_STATE_CONNECTED ||
+  g_assert_true (global_ragent_state[1] == NICE_COMPONENT_STATE_CONNECTED ||
       global_ragent_state[1] == NICE_COMPONENT_STATE_READY);
   g_object_set (G_OBJECT (lagent), "max-connectivity-checks", 100, NULL);
 
@@ -1057,25 +1079,32 @@ int main (void)
   g_debug ("test-fullmode: TEST STARTS / controlling mode conflict case-1");
   result = run_full_test_control_conflict (lagent, ragent, &baseaddr, TRUE);
   priv_print_global_status ();
-  g_assert (result == 0);
+  g_assert_cmpint (result, ==, 0);
 
-  g_assert (global_lagent_state[0] == NICE_COMPONENT_STATE_READY);
-  g_assert (global_lagent_state[1] == NICE_COMPONENT_STATE_READY);
-  g_assert (global_ragent_state[0] == NICE_COMPONENT_STATE_READY);
-  g_assert (global_ragent_state[1] == NICE_COMPONENT_STATE_READY);
+  g_assert_cmpint (global_lagent_state[0], ==, NICE_COMPONENT_STATE_READY);
+  g_assert_cmpint (global_lagent_state[1], ==, NICE_COMPONENT_STATE_READY);
+  g_assert_cmpint (global_ragent_state[0], ==, NICE_COMPONENT_STATE_READY);
+  g_assert_cmpint (global_ragent_state[1], ==, NICE_COMPONENT_STATE_READY);
 
   /* run test with a conflict in controlling mode: controlled-controlled */
   g_debug ("test-fullmode: TEST STARTS / controlling mode conflict case-2");
   result = run_full_test_control_conflict (lagent, ragent, &baseaddr, FALSE);
   priv_print_global_status ();
-  g_assert (result == 0);
-  g_assert (global_lagent_state[0] == NICE_COMPONENT_STATE_READY);
-  g_assert (global_lagent_state[1] == NICE_COMPONENT_STATE_READY);
-  g_assert (global_ragent_state[0] == NICE_COMPONENT_STATE_READY);
-  g_assert (global_ragent_state[1] == NICE_COMPONENT_STATE_READY);
+  g_assert_cmpint (result, ==, 0);
+  g_assert_cmpint (global_lagent_state[0], ==, NICE_COMPONENT_STATE_READY);
+  g_assert_cmpint (global_lagent_state[1], ==, NICE_COMPONENT_STATE_READY);
+  g_assert_cmpint (global_ragent_state[0], ==, NICE_COMPONENT_STATE_READY);
+  g_assert_cmpint (global_ragent_state[1], ==, NICE_COMPONENT_STATE_READY);
 
+  nice_agent_close_async (lagent, cb_closed, &lagent_closed);
+  nice_agent_close_async (ragent, cb_closed, &ragent_closed);
   g_object_unref (lagent);
   g_object_unref (ragent);
+
+  while (!ragent_closed || !ragent_closed) {
+    g_main_context_iteration (NULL, TRUE);
+  }
+
 
   g_main_loop_unref (global_mainloop);
   global_mainloop = NULL;

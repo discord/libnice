@@ -76,8 +76,6 @@ typedef struct {
   NiceSocket *passive_parent;
 } TcpPriv;
 
-#define MAX_QUEUE_LENGTH 20
-
 static void socket_close (NiceSocket *sock);
 static gint socket_recv_messages (NiceSocket *sock,
     NiceInputMessage *recv_messages, guint n_recv_messages);
@@ -312,6 +310,8 @@ socket_send_message (NiceSocket *sock,
   if (priv->error)
     return -1;
 
+  g_mutex_lock(&mutex);
+
   message_len = output_message_get_size (message);
 
   /* First try to send the data, don't send it later if it can be sent now
@@ -322,6 +322,7 @@ socket_send_message (NiceSocket *sock,
 
     if (ret < 0) {
       if (g_error_matches (gerr, G_IO_ERROR, G_IO_ERROR_WOULD_BLOCK) ||
+          g_error_matches (gerr, G_IO_ERROR, G_IO_ERROR_NOT_CONNECTED) ||
           g_error_matches (gerr, G_IO_ERROR, G_IO_ERROR_FAILED)) {
         /* Queue the message and send it later. */
         nice_socket_queue_send_with_callback (&priv->send_queue,
@@ -351,6 +352,8 @@ socket_send_message (NiceSocket *sock,
       ret = 0;
     }
   }
+
+  g_mutex_unlock(&mutex);
 
   return ret;
 }
@@ -436,7 +439,7 @@ socket_send_more (
   gpointer data)
 {
   NiceSocket *sock = (NiceSocket *) data;
-  TcpPriv *priv = sock->priv;
+  TcpPriv *priv;
 
   g_mutex_lock (&mutex);
 
@@ -446,6 +449,8 @@ socket_send_more (
     g_mutex_unlock (&mutex);
     return FALSE;
   }
+
+  priv = sock->priv;
 
   /* connection hangs up or queue was emptied */
   if (condition & G_IO_HUP ||
@@ -475,4 +480,12 @@ nice_tcp_bsd_socket_set_passive_parent (NiceSocket *sock, NiceSocket *passive_pa
   g_assert (priv->passive_parent == NULL);
 
   priv->passive_parent = passive_parent;
+}
+
+NiceSocket *
+nice_tcp_bsd_socket_get_passive_parent (NiceSocket *sock)
+{
+  TcpPriv *priv = sock->priv;
+
+  return priv->passive_parent;
 }

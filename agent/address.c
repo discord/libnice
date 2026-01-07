@@ -88,6 +88,9 @@ inet_ntop_win32 (int af, const void *src, char *dst, socklen_t cnt)
 #endif
 
 
+NICEAPI_EXPORT
+G_DEFINE_BOXED_TYPE (NiceAddress, nice_address, nice_address_dup,
+    nice_address_free);
 
 NICEAPI_EXPORT void
 nice_address_init (NiceAddress *addr)
@@ -194,13 +197,21 @@ NICEAPI_EXPORT void
 nice_address_set_from_sockaddr (NiceAddress *addr,
                                 const struct sockaddr *sa)
 {
+  union {
+    const struct sockaddr *sa;
+    const struct sockaddr_in *in;
+    const struct sockaddr_in6 *in6;
+  } s;
+
+  s.sa = sa;
+
   switch (sa->sa_family)
     {
     case AF_INET:
-      memcpy(&addr->s.ip4, sa, sizeof (addr->s.ip4));
+      memcpy(&addr->s.ip4, s.in, sizeof (addr->s.ip4));
       break;
     case AF_INET6:
-      memcpy(&addr->s.ip6, sa, sizeof (addr->s.ip6));
+      memcpy(&addr->s.ip6, s.in6, sizeof (addr->s.ip6));
       break;
     default:
       g_return_if_reached ();
@@ -248,6 +259,16 @@ nice_address_to_string (const NiceAddress *addr, gchar *dst)
     default:
       g_return_if_reached ();
   }
+}
+
+NICEAPI_EXPORT gchar *
+nice_address_dup_string (const NiceAddress *addr)
+{
+  char dst[MAX(INET_ADDRSTRLEN, INET6_ADDRSTRLEN)] = "";
+
+  nice_address_to_string (addr, dst);
+
+  return g_strdup (dst);
 }
 
 
@@ -298,14 +319,18 @@ ipv4_address_is_private (guint32 addr)
 {
   addr = ntohl (addr);
 
-  /* http://tools.ietf.org/html/rfc3330 */
+  /* http://tools.ietf.org/html/rfc3330 
+   * https://tools.ietf.org/html/rfc3927
+   */
   return (
       /* 10.0.0.0/8 */
       ((addr & 0xff000000) == 0x0a000000) ||
-      /* 172.16.0.0/12 */
+      /* 172.16.0.0 - 172.31.255.255  = 172.16.0.0/12 */
       ((addr & 0xfff00000) == 0xac100000) ||
       /* 192.168.0.0/16 */
       ((addr & 0xffff0000) == 0xc0a80000) ||
+      /* 169.254.x.x/16  (for APIPA) */
+      ((addr & 0xffff0000) == 0xa9fe0000) ||
       /* 127.0.0.0/8 */
       ((addr & 0xff000000) == 0x7f000000));
 }
@@ -315,9 +340,11 @@ static gboolean
 ipv6_address_is_private (const guchar *addr)
 {
   return (
-      /* fe80::/10 */
+      /* fe80::/10 (link local addresses, needs scope) */
       ((addr[0] == 0xfe) && ((addr[1] & 0xc0) == 0x80)) ||
-      /* fc00::/7 */
+      /* fd00::/8 (official private IP block) */
+      (addr[0] == 0xfd) ||
+      /* fc00::/7 (those are ULA) */
       ((addr[0] & 0xfe) == 0xfc) ||
       /* ::1 loopback */
       ((memcmp (addr, "\x00\x00\x00\x00"
@@ -336,6 +363,37 @@ nice_address_is_private (const NiceAddress *a)
       return ipv4_address_is_private (a->s.ip4.sin_addr.s_addr);
     case AF_INET6:
       return ipv6_address_is_private (a->s.ip6.sin6_addr.s6_addr);
+    default:
+      g_return_val_if_reached (FALSE);
+    }
+}
+
+
+static gboolean
+ipv4_address_is_linklocal (guint32 addr)
+{
+  addr = ntohl (addr);
+
+  return (addr & 0xffff0000) == 0xa9fe0000;
+}
+
+
+static gboolean
+ipv6_address_is_linklocal (const guchar *addr)
+{
+  return (addr[0] == 0xfe) && ((addr[1] & 0xc0) == 0x80);
+}
+
+
+NICEAPI_EXPORT gboolean
+nice_address_is_linklocal (const NiceAddress *a)
+{
+  switch (a->s.addr.sa_family)
+    {
+    case AF_INET:
+      return ipv4_address_is_linklocal (a->s.ip4.sin_addr.s_addr);
+    case AF_INET6:
+      return ipv6_address_is_linklocal (a->s.ip6.sin6_addr.s6_addr);
     default:
       g_return_val_if_reached (FALSE);
     }

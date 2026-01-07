@@ -40,6 +40,7 @@
 #ifndef __LIBNICE_CANDIDATE_H__
 #define __LIBNICE_CANDIDATE_H__
 
+#include "address.h"
 #include <glib.h>
 #include <glib-object.h>
 
@@ -59,19 +60,6 @@
 
 G_BEGIN_DECLS
 
-/* Constants for determining candidate priorities */
-#define NICE_CANDIDATE_TYPE_PREF_HOST                 120
-#define NICE_CANDIDATE_TYPE_PREF_PEER_REFLEXIVE       110
-#define NICE_CANDIDATE_TYPE_PREF_NAT_ASSISTED         105
-#define NICE_CANDIDATE_TYPE_PREF_SERVER_REFLEXIVE     100
-#define NICE_CANDIDATE_TYPE_PREF_RELAYED_UDP           30
-#define NICE_CANDIDATE_TYPE_PREF_RELAYED               20
-
-/* Priority preference constants for MS-ICE compatibility */
-#define NICE_CANDIDATE_TRANSPORT_MS_PREF_UDP           15
-#define NICE_CANDIDATE_TRANSPORT_MS_PREF_TCP            6
-#define NICE_CANDIDATE_DIRECTION_MS_PREF_PASSIVE        2
-#define NICE_CANDIDATE_DIRECTION_MS_PREF_ACTIVE         5
 
 /* Max foundation size '1*32ice-char' plus terminating NULL, ICE ID-19  */
 /**
@@ -81,15 +69,32 @@ G_BEGIN_DECLS
  */
 #define NICE_CANDIDATE_MAX_FOUNDATION                (32+1)
 
+/**
+ * NICE_CANDIDATE_MAX_TURN_SERVERS
+ *
+ * The maximum number of turns servers.
+ */
+#define NICE_CANDIDATE_MAX_TURN_SERVERS              8
+
+/**
+ * NICE_CANDIDATE_MAX_LOCAL_ADDRESSES
+ *
+ * The maximum number of local addresses. The constraint is that the
+ * maximum number of local addresses and number of turn servers must
+ * fit on 9 bits, to ensure candidate priority uniqueness. See also
+ * @NICE_CANDIDATE_MAX_TURN_SERVERS. We choose 6 bits for the number of
+ * local addresses, and 3 bits for the number of turn servers.
+ */
+#define NICE_CANDIDATE_MAX_LOCAL_ADDRESSES           64
 
 /**
  * NiceCandidateType:
  * @NICE_CANDIDATE_TYPE_HOST: A host candidate
- * @NICE_CANDIDATE_TYPE_SERVER_REFLEXIVE: A server reflexive candidate
+ * @NICE_CANDIDATE_TYPE_SERVER_REFLEXIVE: A server reflexive candidate (or a NAT-assisted candidate)
  * @NICE_CANDIDATE_TYPE_PEER_REFLEXIVE: A peer reflexive candidate
  * @NICE_CANDIDATE_TYPE_RELAYED: A relay candidate
  *
- * An enum represneting the type of a candidate
+ * An enum representing the type of a candidate
  */
 typedef enum
 {
@@ -133,27 +138,6 @@ typedef enum {
 
 typedef struct _NiceCandidate NiceCandidate;
 
-typedef struct _TurnServer TurnServer;
-
-/**
- * TurnServer:
- * @ref_count: Reference count for the structure.
- * @server: The #NiceAddress of the TURN server
- * @username: The TURN username
- * @password: The TURN password
- * @type: The #NiceRelayType of the server
- *
- * A structure to store the TURN relay settings
- */
-struct _TurnServer
-{
-  gint ref_count;
-
-  NiceAddress server;
-  gchar *username;
-  gchar *password;
-  NiceRelayType type;
-};
 
 /**
  * NiceCandidate:
@@ -169,9 +153,6 @@ struct _TurnServer
  * by nice_agent_set_local_credentials() or nice_agent_set_remote_credentials())
  * @password: The candidate-specific password to use (overrides the one set
  * by nice_agent_set_local_credentials() or nice_agent_set_remote_credentials())
- * @turn: The #TurnServer settings if the candidate is
- * of type %NICE_CANDIDATE_TYPE_RELAYED
- * @sockptr: The underlying socket
  *
  * A structure to represent an ICE candidate
  <note>
@@ -195,8 +176,6 @@ struct _NiceCandidate
   gchar foundation[NICE_CANDIDATE_MAX_FOUNDATION];
   gchar *username;        /* pointer to a nul-terminated username string */
   gchar *password;        /* pointer to a nul-terminated password string */
-  TurnServer *turn;
-  gpointer sockptr;
 };
 
 /**
@@ -247,6 +226,62 @@ nice_candidate_equal_target (const NiceCandidate *candidate1,
     const NiceCandidate *candidate2);
 
   GType nice_candidate_get_type (void);
+
+/**
+ * nice_candidate_type_to_string:
+ * @type: a #NiceCandidateType
+ *
+ * Useful for debugging functions, just returns a static string with the
+ * candidate type.
+ *
+ * Returns: a static string with the candidate type
+ *
+ * Since: 0.1.19
+ */
+const gchar *
+nice_candidate_type_to_string (NiceCandidateType type);
+
+/**
+ * nice_candidate_transport_to_string:
+ * @transport: a #NiceCandidateTransport
+ *
+ * Useful for debugging functions, just returns a static string with the
+ * candidate transport.
+ *
+ * Returns: a static string with the candidate transport
+ *
+ * Since: 0.1.19
+ */
+const gchar *
+nice_candidate_transport_to_string (NiceCandidateTransport transport);
+
+/**
+ * nice_candidate_relay_address:
+ * @candidate: A relay candidate
+ * @addr: The #NiceAddress to fill
+ *
+ * In case the given candidate is relayed through a TURN server, use this utility function to get
+ * its address.
+ *
+ * Since: 0.1.19
+ */
+void
+nice_candidate_relay_address (const NiceCandidate *candidate, NiceAddress *addr);
+
+/**
+ * nice_candidate_stun_server_address:
+ * @candidate: A server-reflexive candidate
+ * @addr: The #NiceAddress to fill
+ *
+ * In case the given candidate server-reflexive, use this utility function to get its address. The
+ * address will be filled only if the candidate was generated using an STUN server.
+ *
+ * Returns: TRUE if it's a STUN created ICE candidate, or FALSE if the reflexed's server was not STUN.
+ *
+ * Since: 0.1.20
+ */
+gboolean
+nice_candidate_stun_server_address (const NiceCandidate *candidate, NiceAddress *addr);
 
 /**
  * NICE_TYPE_CANDIDATE:

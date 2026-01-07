@@ -87,8 +87,15 @@ struct _NiceStream {
   gchar remote_password[NICE_STREAM_MAX_PWD];
   gboolean gathering;
   gboolean gathering_started;
+  gboolean peer_gathering_done;
   gint tos;
   guint tick_counter;
+
+#ifdef HAVE_GUPNP
+  GSList *upnp_mapping;            /* NiceCandidate being mapped */
+  GSList *upnp_mapped;             /* NiceCandidate mapped with UPnP */
+  GSource *upnp_timer_source;      /* source of upnp timeout timer */
+#endif
 };
 
 typedef struct {
@@ -102,6 +109,9 @@ nice_stream_new (guint stream_id, guint n_components, NiceAgent *agent);
 
 void
 nice_stream_close (NiceAgent *agent, NiceStream *stream);
+
+void
+nice_stream_cancel_turn_server_resolving (NiceStream *stream);
 
 NiceComponent *
 nice_stream_find_component_by_id (NiceStream *stream, guint id);

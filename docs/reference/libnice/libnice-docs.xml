@@ -1,12 +1,12 @@
 <?xml version="1.0"?>
 <!DOCTYPE book PUBLIC "-//OASIS//DTD DocBook XML V4.1.2//EN"
                "http://www.oasis-open.org/docbook/xml/4.1.2/docbookx.dtd">
-<book id="index" xmlns:xi="http://www.w3.org/2003/XInclude">
+<book id="index" xmlns:xi="http://www.w3.org/2001/XInclude">
   <bookinfo>
     <title>libnice Reference Manual</title>
     <releaseinfo>
       The latest version of this documentation can be found on-line at
-      <ulink role="online-location" url="http://nice.freedesktop.org/libnice/index.html">http://nice.freedesktop.org/libnice/</ulink>.
+      <ulink role="online-location" url="https://nice.freedesktop.org/libnice/index.html">https://nice.freedesktop.org/libnice/</ulink>.
     </releaseinfo>
   </bookinfo>
 
@@ -108,6 +108,26 @@
     <index role="0.1.15">
       <title>Index of new symbols in 0.1.15</title>
       <xi:include href="xml/api-index-0.1.15.xml"><xi:fallback/></xi:include>
+    </index>
+    <index role="0.1.16">
+      <title>Index of new symbols in 0.1.16</title>
+      <xi:include href="xml/api-index-0.1.16.xml"><xi:fallback/></xi:include>
+    </index>
+    <index role="0.1.17">
+      <title>Index of new symbols in 0.1.17</title>
+      <xi:include href="xml/api-index-0.1.17.xml"><xi:fallback/></xi:include>
+    </index>
+    <index role="0.1.19">
+      <title>Index of new symbols in 0.1.19</title>
+      <xi:include href="xml/api-index-0.1.19.xml"><xi:fallback/></xi:include>
+    </index>
+    <index role="0.1.20">
+      <title>Index of new symbols in 0.1.20</title>
+      <xi:include href="xml/api-index-0.1.20.xml"><xi:fallback/></xi:include>
+    </index>
+    <index role="0.1.23">
+      <title>Index of new symbols in 0.1.23</title>
+      <xi:include href="xml/api-index-0.1.23.xml"><xi:fallback/></xi:include>
     </index>
     <xi:include href="xml/annotation-glossary.xml"><xi:fallback /></xi:include>
   </part>

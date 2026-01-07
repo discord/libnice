@@ -169,7 +169,7 @@ const guint16 PACKET_MAXIMUMS[] = {
 #define DEF_RTO     1000 /* 1 seconds (RFC 6298 sect 2.1) */
 #define MAX_RTO    60000 /* 60 seconds */
 #define DEFAULT_ACK_DELAY    100 /* 100 milliseconds */
-#define DEFAULT_NO_DELAY     FALSE
+#define DEFAULT_NO_DELAY     TRUE
 
 #define DEFAULT_RCV_BUF_SIZE (60 * 1024)
 #define DEFAULT_SND_BUF_SIZE (90 * 1024)
@@ -1073,14 +1073,14 @@ pseudo_tcp_socket_notify_message (PseudoTcpSocket *self,
 {
   gboolean retval;
 
-  g_assert_cmpuint (message->n_buffers, >, 0);
+  g_assert (message->n_buffers > 0);
 
   if (message->n_buffers == 1)
     return pseudo_tcp_socket_notify_packet (self, message->buffers[0].buffer,
         message->buffers[0].size);
 
-  g_assert_cmpuint (message->n_buffers, ==, 2);
-  g_assert_cmpuint (message->buffers[0].size, ==, HEADER_SIZE);
+  g_assert (message->n_buffers == 2);
+  g_assert (message->buffers[0].size == HEADER_SIZE);
 
   if (message->length > MAX_PACKET) {
     //LOG_F(WARNING) << "packet too large";
@@ -1422,7 +1422,7 @@ packet(PseudoTcpSocket *self, guint32 seq, TcpFlags flags,
   } buffer;
   PseudoTcpWriteResult wres = WR_SUCCESS;
 
-  g_assert(HEADER_SIZE + len <= MAX_PACKET);
+  g_assert (HEADER_SIZE + len <= MAX_PACKET);
 
   *buffer.u32 = htonl(priv->conv);
   *(buffer.u32 + 1) = htonl(seq);
@@ -1713,7 +1713,7 @@ process(PseudoTcpSocket *self, Segment *seg)
     for (nFree = nAcked; nFree > 0; ) {
       SSegment *data;
 
-      g_assert(g_queue_get_length (&priv->slist) != 0);
+      g_assert (g_queue_get_length (&priv->slist) != 0);
       data = (SSegment *) g_queue_peek_head (&priv->slist);
 
       if (nFree < data->len) {
@@ -2077,7 +2077,7 @@ transmit(PseudoTcpSocket *self, SSegment *segment, guint32 now)
     PseudoTcpWriteResult wres;
 
     /* The packet must not have already been acknowledged. */
-    g_assert_cmpuint (segment->seq - priv->snd_una, <=, 1024 * 1024 * 64);
+    g_assert (segment->seq - priv->snd_una <= 1024 * 1024 * 64);
 
     /* Write out the packet. */
     wres = packet(self, seq, flags,
@@ -2091,7 +2091,7 @@ transmit(PseudoTcpSocket *self, SSegment *segment, guint32 now)
       return ECONNABORTED;  /* FIXME: This error code doesn’t quite seem right */
     }
 
-    g_assert(wres == WR_TOO_LARGE);
+    g_assert (wres == WR_TOO_LARGE);
 
     while (TRUE) {
       if (PACKET_MAXIMUMS[priv->msslevel + 1] == 0) {
@@ -2495,7 +2495,7 @@ resize_receive_buffer (PseudoTcpSocket *self, guint32 new_size)
   // buffer. This should always be true because this method is called either
   // before connection is established or when peers are exchanging connect
   // messages.
-  g_assert(result);
+  g_assert (result);
   priv->rbuf_len = new_size;
   priv->rwnd_scale = scale_factor;
   priv->ssthresh = new_size;

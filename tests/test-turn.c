@@ -1,9 +1,9 @@
-#include <stdlib.h>
-#include <stdio.h>
 #include <string.h>
 
 #include <gio/gio.h>
 #include <agent.h>
+
+#include "test-common.h"
 
 static NiceComponentState global_lagent_state[2] = { NICE_COMPONENT_STATE_LAST, NICE_COMPONENT_STATE_LAST };
 static NiceComponentState global_ragent_state[2] = { NICE_COMPONENT_STATE_LAST, NICE_COMPONENT_STATE_LAST };
@@ -85,7 +85,7 @@ static void cb_component_state_changed (NiceAgent *agent, guint stream_id, guint
     global_components_ready++;
   else if (state == NICE_COMPONENT_STATE_CONNECTED && ready_to_connected)
     global_components_ready--;
-  g_assert (state != NICE_COMPONENT_STATE_FAILED);
+  g_assert_true (state != NICE_COMPONENT_STATE_FAILED);
 
   g_debug ("test-turn: checks READY %u.", global_components_ready);
 }
@@ -101,46 +101,12 @@ static void cb_new_selected_pair(NiceAgent *agent, guint stream_id,
     ++global_ragent_cands;
 }
 
-static void set_candidates (NiceAgent *from, guint from_stream,
-    NiceAgent *to, guint to_stream, guint component, gboolean remove_non_relay,
-    gboolean force_relay)
+static void cb_closed (GObject *src, GAsyncResult *res, gpointer data)
 {
-  GSList *cands = NULL, *i;
+  NiceAgent *agent = NICE_AGENT (src);
+  g_debug ("test-turn:%s: %p", G_STRFUNC, agent);
 
-  cands = nice_agent_get_local_candidates (from, from_stream, component);
-  if (remove_non_relay) {
-  restart:
-    for (i = cands; i; i = i->next) {
-      NiceCandidate *cand = i->data;
-      if (force_relay)
-        g_assert (cand->type == NICE_CANDIDATE_TYPE_RELAYED);
-      if (cand->type != NICE_CANDIDATE_TYPE_RELAYED) {
-        cands = g_slist_remove (cands, cand);
-        nice_candidate_free (cand);
-        goto restart;
-      }
-    }
-  }
-  nice_agent_set_remote_candidates (to, to_stream, component, cands);
-
-  for (i = cands; i; i = i->next)
-    nice_candidate_free ((NiceCandidate *) i->data);
-  g_slist_free (cands);
-}
-
-static void set_credentials (NiceAgent *lagent, guint lstream,
-    NiceAgent *ragent, guint rstream)
-{
-  gchar *ufrag = NULL, *password = NULL;
-
-  nice_agent_get_local_credentials(lagent, lstream, &ufrag, &password);
-  nice_agent_set_remote_credentials (ragent, rstream, ufrag, password);
-  g_free (ufrag);
-  g_free (password);
-  nice_agent_get_local_credentials(ragent, rstream, &ufrag, &password);
-  nice_agent_set_remote_credentials (lagent, lstream, ufrag, password);
-  g_free (ufrag);
-  g_free (password);
+  *((gboolean *)data) = TRUE;
 }
 
 static void
@@ -154,6 +120,8 @@ run_test(guint turn_port, gboolean is_ipv6,
   NiceAddress localaddr;
   guint ls_id, rs_id;
   gulong timer_id;
+  gboolean lagent_closed = FALSE;
+  gboolean ragent_closed = FALSE;
 
   if (is_ipv6)
     localhost = "::1";
@@ -161,6 +129,10 @@ run_test(guint turn_port, gboolean is_ipv6,
     localhost = "127.0.0.1";
 
   /* step: initialize variables modified by the callbacks */
+  global_lagent_state[0] = NICE_COMPONENT_STATE_LAST;
+  global_ragent_state[0] = NICE_COMPONENT_STATE_LAST;
+  global_lagent_state[1] = NICE_COMPONENT_STATE_LAST;
+  global_ragent_state[1] = NICE_COMPONENT_STATE_LAST;
   global_components_ready = 0;
   global_lagent_gathering_done = FALSE;
   global_ragent_gathering_done = FALSE;
@@ -205,52 +177,61 @@ run_test(guint turn_port, gboolean is_ipv6,
 
   ls_id = nice_agent_add_stream (lagent, 1);
   rs_id = nice_agent_add_stream (ragent, 1);
-  g_assert (ls_id > 0);
-  g_assert (rs_id > 0);
+  g_assert_cmpuint (ls_id, >, 0);
+  g_assert_cmpuint (rs_id, >, 0);
   nice_agent_set_relay_info(lagent, ls_id, 1,
       localhost, turn_port, TURN_USER, TURN_PASS, turn_type);
   nice_agent_set_relay_info(ragent, rs_id, 1,
       localhost, turn_port, TURN_USER, TURN_PASS, turn_type);
 
+  g_assert_true (global_lagent_gathering_done == FALSE);
+  g_assert_true (global_ragent_gathering_done == FALSE);
+  g_debug ("test-turn: Added streams, running context until 'candidate-gathering-done'...");
+
   /* Gather candidates and test nice_agent_set_port_range */
-  g_assert (nice_agent_gather_candidates (lagent, ls_id) == TRUE);
-  g_assert (nice_agent_gather_candidates (ragent, rs_id) == TRUE);
+  g_assert_true (nice_agent_gather_candidates (lagent, ls_id) == TRUE);
+  g_assert_true (nice_agent_gather_candidates (ragent, rs_id) == TRUE);
 
   nice_agent_attach_recv (lagent, ls_id, NICE_COMPONENT_TYPE_RTP,
       g_main_context_default (), cb_nice_recv, GUINT_TO_POINTER (1));
   nice_agent_attach_recv (ragent, rs_id, NICE_COMPONENT_TYPE_RTP,
       g_main_context_default (), cb_nice_recv, GUINT_TO_POINTER (2));
 
-  g_assert (global_lagent_gathering_done == FALSE);
-  g_assert (global_ragent_gathering_done == FALSE);
-  g_debug ("test-turn: Added streams, running context until 'candidate-gathering-done'...");
   while (!global_lagent_gathering_done)
     g_main_context_iteration (NULL, TRUE);
-  g_assert (global_lagent_gathering_done == TRUE);
+  g_assert_true (global_lagent_gathering_done == TRUE);
   while (!global_ragent_gathering_done)
     g_main_context_iteration (NULL, TRUE);
-  g_assert (global_ragent_gathering_done == TRUE);
+  g_assert_true (global_ragent_gathering_done == TRUE);
 
-  set_credentials (lagent, ls_id, ragent, rs_id);
+  test_common_set_credentials (lagent, ls_id, ragent, rs_id);
 
-  set_candidates (ragent, rs_id, lagent, ls_id, NICE_COMPONENT_TYPE_RTP,
+  test_common_set_candidates (ragent, rs_id, lagent, ls_id, NICE_COMPONENT_TYPE_RTP,
       remove_non_relay, force_relay);
-  set_candidates (lagent, ls_id, ragent, rs_id, NICE_COMPONENT_TYPE_RTP,
+  test_common_set_candidates (lagent, ls_id, ragent, rs_id, NICE_COMPONENT_TYPE_RTP,
       remove_non_relay, force_relay);
 
   while (global_lagent_state[0] != NICE_COMPONENT_STATE_READY ||
       global_ragent_state[0] != NICE_COMPONENT_STATE_READY)
     g_main_context_iteration (NULL, TRUE);
-  g_assert (global_lagent_state[0] == NICE_COMPONENT_STATE_READY);
-  g_assert (global_ragent_state[0] == NICE_COMPONENT_STATE_READY);
+  g_assert_cmpint (global_lagent_state[0], ==, NICE_COMPONENT_STATE_READY);
+  g_assert_cmpint (global_ragent_state[0], ==, NICE_COMPONENT_STATE_READY);
 
   nice_agent_remove_stream (lagent, ls_id);
   nice_agent_remove_stream (ragent, rs_id);
 
-  g_source_remove (timer_id);
+  nice_agent_close_async (lagent, cb_closed, &lagent_closed);
+  nice_agent_close_async (ragent, cb_closed, &ragent_closed);
 
   g_clear_object(&lagent);
   g_clear_object(&ragent);
+
+  while (!lagent_closed || !ragent_closed) {
+    g_main_context_iteration (NULL, TRUE);
+  }
+
+  g_source_remove (timer_id);
+
 }
 
 guint global_turn_port;
@@ -321,44 +302,21 @@ udp_force_no_remove_tcp (void)
       NICE_RELAY_TYPE_TURN_TCP);
 }
 
-
-
-
-
 int
 main (int argc, char **argv)
 {
-  GSubprocess *sp;
-  GError *error = NULL;
-  gchar portstr[10];
   int ret;
-  gchar *out_str = NULL;
-  gchar *err_str = NULL;
 
   g_test_init (&argc, &argv, NULL);
 
-  global_turn_port = g_random_int_range (10000, 60000);
-  snprintf(portstr, 9, "%u", global_turn_port);
-
-  if (g_spawn_command_line_sync ("turnserver --help", &out_str, &err_str, NULL,
-          NULL) && err_str) {
-    if (!strstr(err_str, "--user")) {
-      g_print ("rfc5766-turn-server not installed, skipping turn test\n");
-      return 0;
-    }
-  } else {
-    g_print ("rfc5766-turn-server not installed, skipping turn test\n");
+  if (!test_common_turnserver_available ()) {
+    g_print ("coturn not installed, skipping turn test\n");
     return 0;
   }
-  g_free (err_str);
-  g_free (out_str);
 
-  sp = g_subprocess_new (G_SUBPROCESS_FLAGS_STDOUT_SILENCE, &error,
-      "turnserver",
-      "--user", "toto:0xaae440b3348d50265b63703117c7bfd5",
-      "--realm", "realm",
-      "--listening-port", portstr,
-      NULL);
+  const gchar* turn_server_ip = "127.0.0.1";
+  TestTurnServer *turn_server = test_common_turn_server_new (turn_server_ip, TURN_USER, TURN_PASS);
+  global_turn_port = turn_server->port;
 
   g_test_add_func ("/nice/turn/udp", udp_no_force_no_remove_udp);
   g_test_add_func ("/nice/turn/udp/remove_non_turn",
@@ -373,9 +331,7 @@ main (int argc, char **argv)
 
   ret = g_test_run ();
 
-  g_subprocess_force_exit (sp);
-  g_subprocess_wait (sp, NULL, NULL);
-  g_clear_object (&sp);
+  test_common_turn_server_destroy (turn_server);
 
   return ret;
 }

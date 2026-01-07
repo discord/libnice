@@ -44,9 +44,16 @@
 #include <unistd.h>
 #endif
 
+/* Remove this when we request GLib 2.58 */
+#if defined (GLIB_VERSION_2_58) && GLIB_VERSION_MAX_ALLOWED >= GLIB_VERSION_2_58
+#error "Remove this paragraph"
+#endif
+#undef G_SOURCE_FUNC
+#define G_SOURCE_FUNC(f) ((GSourceFunc) (void (*)(void)) (f))
+
 /* Make the message sufficiently large to not hit Nagle’s algorithm in the
  * pseudo-TCP implementation, and hence run really slowly. */
-#define MESSAGE_SIZE 1284 /* bytes */
+#define MESSAGE_SIZE 1200 /* bytes */
 
 typedef struct _TestIOStreamThreadData TestIOStreamThreadData;
 
@@ -61,6 +68,7 @@ typedef struct {
   void (*new_selected_pair) (NiceAgent *agent, guint stream_id,
       guint component_id, gchar *lfoundation, gchar *rfoundation,
       TestIOStreamThreadData *data);
+  void (*wait_transmission_cb) (NiceAgent *agent);
 } TestIOStreamCallbacks;
 
 struct _TestIOStreamThreadData {
@@ -84,6 +92,8 @@ struct _TestIOStreamThreadData {
   /*< private >*/
   const TestIOStreamCallbacks *callbacks;
 
+  gboolean done;
+
   /* Condition signalling for the stream being open/writeable. */
   gboolean stream_open;
   gboolean stream_ready;
@@ -95,12 +105,19 @@ struct _TestIOStreamThreadData {
   guint *start_count;
 };
 
+typedef enum
+{
+  TEST_IO_STREAM_OPTION_TCP_ONLY = 1 << 0,
+  TEST_IO_STREAM_OPTION_BYTESTREAM_TCP = 1 << 1,
+} TestIOStreamOption;
+
 GThread *spawn_thread (const gchar *thread_name, GThreadFunc thread_func,
     gpointer user_data);
 void run_io_stream_test (guint deadlock_timeout, gboolean reliable,
     const TestIOStreamCallbacks *callbacks,
     gpointer l_user_data, GDestroyNotify l_user_data_free,
-    gpointer r_user_data, GDestroyNotify r_user_data_free);
+    gpointer r_user_data, GDestroyNotify r_user_data_free,
+    TestIOStreamOption flags);
 void check_for_termination (TestIOStreamThreadData *data, gsize *recv_count,
     gsize *other_recv_count, volatile gsize *send_count, gsize expected_recv_count);
 

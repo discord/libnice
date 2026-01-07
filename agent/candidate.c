@@ -53,6 +53,7 @@
 #include "agent.h"
 #include "component.h"
 #include "interfaces.h"
+#include "candidate-priv.h"
 
 G_DEFINE_BOXED_TYPE (NiceCandidate, nice_candidate, nice_candidate_copy,
     nice_candidate_free);
@@ -65,17 +66,17 @@ G_DEFINE_BOXED_TYPE (NiceCandidate, nice_candidate, nice_candidate_copy,
 NICEAPI_EXPORT NiceCandidate *
 nice_candidate_new (NiceCandidateType type)
 {
-  NiceCandidate *candidate;
+  NiceCandidateImpl *c;
 
-  candidate = g_slice_new0 (NiceCandidate);
-  candidate->type = type;
-  return candidate;
+  c = g_slice_new0 (NiceCandidateImpl);
+  c->c.type = type;
+  return (NiceCandidate *) c;
 }
-
 
 NICEAPI_EXPORT void
 nice_candidate_free (NiceCandidate *candidate)
 {
+  NiceCandidateImpl *c = (NiceCandidateImpl *) candidate;
   /* better way of checking if socket is allocated? */
 
   if (candidate->username)
@@ -84,10 +85,13 @@ nice_candidate_free (NiceCandidate *candidate)
   if (candidate->password)
     g_free (candidate->password);
 
-  if (candidate->turn)
-    turn_server_unref (candidate->turn);
+  if (c->turn)
+    turn_server_unref (c->turn);
 
-  g_slice_free (NiceCandidate, candidate);
+  if (c->stun_server)
+    nice_address_free (c->stun_server);
+
+  g_slice_free (NiceCandidateImpl, c);
 }
 
 
@@ -137,18 +141,29 @@ nice_candidate_ice_priority_full (
       (0x100 - component_id));
 }
 
-static guint32
+static guint16
 nice_candidate_ice_local_preference_full (guint direction_preference,
-    guint other_preference)
+    guint turn_preference, guint other_preference)
 {
-  return (0x2000 * direction_preference +
-      other_preference);
+  /*
+   * bits  0- 5: other_preference (ip local preference)
+   *       6- 8: turn_preference
+   *       9-12: <unused>
+   *      13-15: direction_preference
+   */
+  g_assert (other_preference < NICE_CANDIDATE_MAX_LOCAL_ADDRESSES);
+  g_assert (turn_preference < NICE_CANDIDATE_MAX_TURN_SERVERS);
+  g_assert (direction_preference < 8);
+
+  return (direction_preference << 13) +
+      (turn_preference << 6) +
+      other_preference;
 }
 
-static guint8
+static guint
 nice_candidate_ip_local_preference (const NiceCandidate *candidate)
 {
-  guint8 preference = 0;
+  guint preference = 0;
   gchar ip_string[INET6_ADDRSTRLEN];
   GList/*<owned gchar*>*/ *ips = NULL;
   GList/*<unowned gchar*>*/ *iter;
@@ -171,9 +186,12 @@ nice_candidate_ip_local_preference (const NiceCandidate *candidate)
   ips = nice_interfaces_get_local_ips (TRUE);
 
   for (iter = ips; iter; iter = g_list_next (iter)) {
-    if (g_strcmp0 (ip_string, iter->data) == 0) {
+    /* Strip the IPv6 link-local scope string */
+    gchar **tokens = g_strsplit (iter->data, "%", 2);
+    gboolean match = (g_strcmp0 (ip_string, tokens[0]) == 0);
+    g_strfreev (tokens);
+    if (match)
       break;
-    }
     ++preference;
   }
 
@@ -185,7 +203,9 @@ nice_candidate_ip_local_preference (const NiceCandidate *candidate)
 static guint16
 nice_candidate_ice_local_preference (const NiceCandidate *candidate)
 {
-  guint direction_preference;
+  const NiceCandidateImpl *c = (NiceCandidateImpl *) candidate;
+  guint direction_preference = 0;
+  guint turn_preference = 0;
 
   switch (candidate->transport)
     {
@@ -212,28 +232,50 @@ nice_candidate_ice_local_preference (const NiceCandidate *candidate)
         break;
       case NICE_CANDIDATE_TRANSPORT_UDP:
       default:
-        return 1;
+        direction_preference = 1;
         break;
     }
 
+  /* Relay candidates are assigned a unique local preference at
+   * creation time.
+   */
+  if (candidate->type == NICE_CANDIDATE_TYPE_RELAYED) {
+    g_assert (c->turn);
+    turn_preference = c->turn->preference;
+  }
+
   return nice_candidate_ice_local_preference_full (direction_preference,
-      nice_candidate_ip_local_preference (candidate));
+      turn_preference, nice_candidate_ip_local_preference (candidate));
 }
 
-static guint32
+static guint16
 nice_candidate_ms_ice_local_preference_full (guint transport_preference,
-    guint direction_preference, guint other_preference)
+    guint direction_preference, guint turn_preference, guint other_preference)
 {
-  return 0x1000 * transport_preference +
-      0x200 * direction_preference +
-      0x1 * other_preference;
+  /*
+   * bits 0- 5: other_preference (ip local preference)
+   *      6- 8: turn_preference
+   *      9-11: direction_preference
+   *     12-15: transport_preference
+   */
+  g_assert (other_preference < NICE_CANDIDATE_MAX_LOCAL_ADDRESSES);
+  g_assert (turn_preference < NICE_CANDIDATE_MAX_TURN_SERVERS);
+  g_assert (direction_preference < 8);
+  g_assert (transport_preference < 16);
+
+  return (transport_preference << 12) +
+      (direction_preference << 9) +
+      (turn_preference << 6) +
+      other_preference;
 }
 
 static guint32
 nice_candidate_ms_ice_local_preference (const NiceCandidate *candidate)
 {
-  guint8 transport_preference = 0;
-  guint8 direction_preference = 0;
+  const NiceCandidateImpl *c = (NiceCandidateImpl *) candidate;
+  guint transport_preference = 0;
+  guint direction_preference = 0;
+  guint turn_preference = 0;
 
   switch (candidate->transport)
     {
@@ -252,14 +294,24 @@ nice_candidate_ms_ice_local_preference (const NiceCandidate *candidate)
       break;
     }
 
+  /* Relay candidates are assigned a unique local preference at
+   * creation time.
+   */
+  if (candidate->type == NICE_CANDIDATE_TYPE_RELAYED) {
+    g_assert (c->turn);
+    turn_preference = c->turn->preference;
+  }
+
   return nice_candidate_ms_ice_local_preference_full(transport_preference,
-      direction_preference, nice_candidate_ip_local_preference (candidate));
+      direction_preference, turn_preference,
+      nice_candidate_ip_local_preference (candidate));
 }
 
 static guint8
 nice_candidate_ice_type_preference (const NiceCandidate *candidate,
     gboolean reliable, gboolean nat_assisted)
 {
+  const NiceCandidateImpl *c = (NiceCandidateImpl *) candidate;
   guint8 type_preference;
 
   switch (candidate->type)
@@ -277,7 +329,7 @@ nice_candidate_ice_type_preference (const NiceCandidate *candidate,
         type_preference = NICE_CANDIDATE_TYPE_PREF_SERVER_REFLEXIVE;
       break;
     case NICE_CANDIDATE_TYPE_RELAYED:
-      if (candidate->turn->type == NICE_RELAY_TYPE_TURN_UDP)
+      if (c->turn->type == NICE_RELAY_TYPE_TURN_UDP)
         type_preference = NICE_CANDIDATE_TYPE_PREF_RELAYED_UDP;
       else
         type_preference = NICE_CANDIDATE_TYPE_PREF_RELAYED;
@@ -341,24 +393,34 @@ nice_candidate_pair_priority (guint32 o_prio, guint32 a_prio)
   return (one << thirtytwo) * min + 2 * max + (o_prio > a_prio ? 1 : 0);
 }
 
+void
+nice_candidate_pair_priority_to_string (guint64 prio, gchar *string)
+{
+  g_snprintf (string, NICE_CANDIDATE_PAIR_PRIORITY_MAX_SIZE,
+      "%08" G_GINT64_MODIFIER "x:%08" G_GINT64_MODIFIER "x:%" G_GUINT64_FORMAT,
+      prio >> 32, (prio >> 1) & 0x7fffffff, prio & 1);
+}
+
 /*
  * Copies a candidate
  */
 NICEAPI_EXPORT NiceCandidate *
 nice_candidate_copy (const NiceCandidate *candidate)
 {
-  NiceCandidate *copy;
+  NiceCandidateImpl *copy;
 
   g_return_val_if_fail (candidate != NULL, NULL);
 
-  copy = nice_candidate_new (candidate->type);
-  memcpy (copy, candidate, sizeof(NiceCandidate));
+  copy = (NiceCandidateImpl *) nice_candidate_new (candidate->type);
+  memcpy (copy, candidate, sizeof(NiceCandidateImpl));
 
   copy->turn = NULL;
-  copy->username = g_strdup (copy->username);
-  copy->password = g_strdup (copy->password);
+  copy->c.username = g_strdup (copy->c.username);
+  copy->c.password = g_strdup (copy->c.password);
+  if (copy->stun_server)
+    copy->stun_server = nice_address_dup (copy->stun_server);
 
-  return copy;
+  return (NiceCandidate *) copy;
 }
 
 NICEAPI_EXPORT gboolean
@@ -370,4 +432,66 @@ nice_candidate_equal_target (const NiceCandidate *candidate1,
 
   return (candidate1->transport == candidate2->transport &&
       nice_address_equal (&candidate1->addr, &candidate2->addr));
+}
+
+
+NICEAPI_EXPORT const gchar *
+nice_candidate_type_to_string (NiceCandidateType type)
+{
+  switch (type) {
+    case NICE_CANDIDATE_TYPE_HOST:
+      return "host";
+    case NICE_CANDIDATE_TYPE_SERVER_REFLEXIVE:
+      return "srflx";
+    case NICE_CANDIDATE_TYPE_PEER_REFLEXIVE:
+      return "prflx";
+    case NICE_CANDIDATE_TYPE_RELAYED:
+      return "relay";
+    default:
+      g_assert_not_reached ();
+  }
+}
+
+NICEAPI_EXPORT const gchar *
+nice_candidate_transport_to_string (NiceCandidateTransport transport)
+{
+  switch (transport) {
+    case NICE_CANDIDATE_TRANSPORT_UDP:
+      return "udp";
+    case NICE_CANDIDATE_TRANSPORT_TCP_ACTIVE:
+      return "tcp-act";
+    case NICE_CANDIDATE_TRANSPORT_TCP_PASSIVE:
+      return "tcp-pass";
+    case NICE_CANDIDATE_TRANSPORT_TCP_SO:
+      return "tcp-so";
+    default:
+      g_assert_not_reached ();
+  }
+}
+
+NICEAPI_EXPORT void
+nice_candidate_relay_address (const NiceCandidate *candidate, NiceAddress *addr)
+{
+  const NiceCandidateImpl *c = (NiceCandidateImpl *) candidate;
+
+  g_return_if_fail (candidate != NULL);
+  g_return_if_fail (candidate->type == NICE_CANDIDATE_TYPE_RELAYED);
+
+  *addr = c->turn->server;
+}
+
+NICEAPI_EXPORT gboolean
+nice_candidate_stun_server_address (const NiceCandidate *candidate, NiceAddress *addr)
+{
+  const NiceCandidateImpl *c = (NiceCandidateImpl *) candidate;
+
+  g_return_val_if_fail (candidate != NULL, FALSE);
+  g_return_val_if_fail (candidate->type == NICE_CANDIDATE_TYPE_SERVER_REFLEXIVE, FALSE);
+
+  if (c->stun_server) {
+    *addr = *c->stun_server;
+    return TRUE;
+  } else {
+    return FALSE;
+  }
 }

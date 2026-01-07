@@ -67,7 +67,7 @@ struct _GstNiceSrc
   guint component_id;
   GMainContext *mainctx;
   GMainLoop *mainloop;
-  GQueue *outbufs;
+  GstBufferList *outbufs;
   gboolean unlocked;
   GSource *idle_source;
 };
@@ -80,6 +80,8 @@ struct _GstNiceSrcClass
 };
 
 GType gst_nice_src_get_type (void);
+
+gboolean gst_element_register_nicesrc (GstPlugin * plugin);
 
 G_END_DECLS
 

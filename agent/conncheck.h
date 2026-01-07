@@ -49,6 +49,11 @@
 
 #define NICE_CANDIDATE_PAIR_MAX_FOUNDATION        NICE_CANDIDATE_MAX_FOUNDATION*2
 
+/* A helper macro to test whether connection checks should continue to be
+ * performed after a component has successfully connected */
+#define NICE_AGENT_DO_KEEPALIVE_CONNCHECKS(obj) \
+  ((obj)->consent_freshness || (obj)->keepalive_conncheck || (obj)->compatibility == NICE_COMPATIBILITY_GOOGLE)
+
 /**
  * NiceCheckState:
  * @NICE_CHECK_WAITING: Waiting to be scheduled.
@@ -75,7 +80,7 @@ typedef struct _StunTransaction StunTransaction;
 
 struct _StunTransaction
 {
-  GTimeVal next_tick;       /* next tick timestamp */
+  gint64 next_tick;       /* next tick timestamp */
   StunTimer timer;
   uint8_t buffer[STUN_MAX_MESSAGE_SIZE_IPV6];
   StunMessage message;
@@ -98,7 +103,7 @@ struct _CandidateCheckPair
   CandidateCheckPair *discovered_pair;
   CandidateCheckPair *succeeded_pair;
   guint64 priority;
-  guint32 prflx_priority;
+  guint32 stun_priority;
   GSList *stun_transactions; /* a list of ongoing stun requests */
 };
 
@@ -106,7 +111,6 @@ int conn_check_add_for_candidate (NiceAgent *agent, guint stream_id, NiceCompone
 int conn_check_add_for_local_candidate (NiceAgent *agent, guint stream_id, NiceComponent *component, NiceCandidate *local);
 gboolean conn_check_add_for_candidate_pair (NiceAgent *agent, guint stream_id, NiceComponent *component, NiceCandidate *local, NiceCandidate *remote);
 void conn_check_free (NiceAgent *agent);
-void conn_check_schedule_next (NiceAgent *agent);
 int conn_check_send (NiceAgent *agent, CandidateCheckPair *pair);
 void conn_check_prune_stream (NiceAgent *agent, NiceStream *stream);
 gboolean conn_check_handle_inbound_stun (NiceAgent *agent, NiceStream *stream, NiceComponent *component, NiceSocket *udp_socket, const NiceAddress *from, gchar *buf, guint len);
@@ -118,8 +122,13 @@ void
 conn_check_prune_socket (NiceAgent *agent, NiceStream *stream, NiceComponent *component,
     NiceSocket *sock);
 
-guint32 ensure_unique_priority (NiceStream *stream, NiceComponent *component,
-    guint32 priority);
 void recalculate_pair_priorities (NiceAgent *agent);
+void conn_check_update_selected_pair (NiceAgent *agent,
+    NiceComponent *component, CandidateCheckPair *pair);
+void conn_check_update_check_list_state_for_ready (NiceAgent *agent,
+    NiceStream *stream, NiceComponent *component);
+void conn_check_unfreeze_related (NiceAgent *agent, CandidateCheckPair *pair);
+guint conn_check_stun_transactions_count (NiceAgent *agent);
+
 
 #endif /*_NICE_CONNCHECK_H */

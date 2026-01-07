@@ -8,6 +8,7 @@ ignore_headers = [
   'agent-priv.h',
   'iostream.h',
   'inputstream.h',
+  'candidate-priv.h',
   'outputstream.h',
   'gstnice.h',
   'gstnicesrc.h',
@@ -24,11 +25,24 @@ ignore_headers = [
   'win32_common.h',
 ]
 
+if dependency('gtk-doc', version: '<1.30', required: false).found()
+  prog_python = import('python').find_installation('python3')
+  fake_makefile = custom_target ('libnice-docs-test-Makefile',
+                                 output: 'Makefile',
+                                 command: [
+                                   prog_python, '-c',
+                                   'with open("@OUTPUT@","w") as f: f.writelines(["""DOC_MODULE=libnice\nDOC_MAIN_SGML_FILE=libnice-docs.sgml\n"""])'
+                                   ])
+else
+  fake_makefile = []
+endif
+
 gnome.gtkdoc('libnice',
              main_xml: 'libnice-docs.xml',
              namespace: 'nice',
              mode: 'none',
-             src_dir: ['agent', 'stun'],
+             src_dir: [agent_include, stun_include, nice_include],
+             content_files: fake_makefile,
              dependencies: libnice_dep,
              scan_args: [
                '--rebuild-types',
@@ -47,7 +61,8 @@ gnome.gtkdoc('libnice',
                '--output-format=xml',
                '--name-space=Nice',
              ],
-             install: true)
+             install: true,
+             check: true)
 
 # If we ever need to regenerate this diagram.
 # Since it’s not expected to change much, let’s not depend on GraphViz to

@@ -20,31 +20,39 @@ nice_tests = [
   'test-restart',
   'test-fallback',
   'test-thread',
-  'test-dribble',
+  'test-trickle',
   'test-tcp',
   'test-icetcp',
+  'test-bytestream-tcp',
   'test-credentials',
   'test-turn',
   'test-drop-invalid',
   'test-nomination',
+  'test-interfaces',
+  'test-set-port-range',
+  'test-consent',
 ]
 
 if cc.has_header('arpa/inet.h')
   nice_tests += [
     'test-pseudotcp-fin',
-    'test-new-dribble',
+    'test-new-trickle',
   ]
 endif
 
-tenv = environment()
-tenv.set('BUILT_WITH_MESON', '1')
+if host_machine.system() == 'linux'
+  nice_tests += [
+    'test-slow-resolving',
+  ]
+endif
 
 foreach tname : nice_tests
-  if tname.startswith('test-io-stream') or tname.startswith('test-send-recv')
+  if tname.startswith('test-io-stream') or tname.startswith('test-send-recv') or tname == 'test-bytestream-tcp'
     extra_src = ['test-io-stream-common.c']
   else
     extra_src = []
   endif
+  extra_src += ['test-common.c']
   exe = executable('nice-@0@'.format(tname),
     '@0@.c'.format(tname), extra_src,
     c_args: '-DG_LOG_DOMAIN="libnice-tests"',
@@ -53,40 +61,67 @@ foreach tname : nice_tests
     link_with: [libagent, libstun, libsocket, librandom],
     install: false)
   set_variable(tname.underscorify(), exe)
-  test(tname, exe, env: tenv)
+  if tname == 'test-slow-resolving'
+    dl_dep = cc.find_library('dl')
+    preload_lib = shared_library('slow-resolver', 'slow-resolver.c', dependencies: [dl_dep])
+    preload_env = environment()
+    preload_env.append('LD_PRELOAD', preload_lib.full_path())
+    test(tname, exe, env: preload_env)
+  else
+    test(tname, exe)
+  endif
+
+  if tname == 'test-fullmode'
+    wrapper_exe = executable ('nice-test-fullmode-with-stun',
+			      'test-fullmode-with-stun.c',
+			      dependencies: gio_deps,
+			      install: false)
+    test('test-fullmode-with-stun', wrapper_exe,
+	 args: [stund_exe, test_fullmode],
+	 is_parallel: false,
+	 depends: exe)
+  endif
 endforeach
 
-if gst_dep.found()
-  gst_check = dependency('gstreamer-check-1.0', required: get_option('gstreamer'),
-                         fallback : ['gstreamer', 'gst_check_dep'])
+# FIXME: The GStreamer test needs nicesrc and nicesink plugins to run. libnice might be part of the GStreamer build.
+# In this case, in static mode (gstreamer-full), the test should be built after gstreamer-full to initialize
+# properly the plugins (gstreamer and libnice ones) with gst_init_static_plugins.
+# That's the reason the test is now disabled in static mode.
+if gst_dep.found() and not static_build
+  gst_check = dependency('gstreamer-check-1.0', required: get_option('gstreamer'))
   if gst_check.found()
+    test_defines = [
+      '-DG_LOG_DOMAIN="libnice-tests"',
+      '-UG_DISABLE_ASSERT',
+      '-UG_DISABLE_CAST_CHECKS',
+    ]
+    gst_env = environment()
+    dl_dep = cc.find_library('dl')
+    instrument_send_lib = shared_library('instrument-send',
+      'instrument-send.c',
+      c_args: '-DG_LOG_DOMAIN="libnice-instrument-send"',
+      dependencies: [dl_dep, gio_deps],
+    )
+    gst_env.append('LD_PRELOAD', instrument_send_lib.full_path())
     exe = executable('nice-test-gstreamer',
       'test-gstreamer.c', extra_src,
-      c_args: '-DG_LOG_DOMAIN="libnice-tests"',
+      c_args: test_defines,
       include_directories: nice_incs,
       dependencies: [nice_deps, gst_check, libm],
-      link_with: libnice,
+      link_with: [libnice, instrument_send_lib],
       install: false)
-    test('test-gstreamer', exe, env: tenv)
+    gst_env.append('GST_PLUGIN_PATH_1_0', join_paths(meson.current_build_dir(), '..', 'gst'))
+    gst_env.append('CK_DEFAULT_TIMEOUT', '30')
+    test('test-gstreamer', exe, env: gst_env)
   endif
 endif
 
-if find_program('sh', required : false).found()
-  dd = find_program('dd', required : false)
-  diff = find_program('diff', required : false)
-  if dd.found() and diff.found()
-    test('test-pseudotcp-random', find_program('test-pseudotcp-random.sh'),
-      args: test_pseudotcp,
-      env: tenv)
-  endif
-
-  test('test-fullmode-with-stun', files('check-test-fullmode-with-stun.sh'),
-    args: [stund_exe, test_fullmode],
-    env: tenv,
-    is_parallel: false)
+if find_program('sh', required : false).found() and find_program('dd', required : false).found() and find_program('diff', required : false).found()
+  test('test-pseudotcp-random', find_program('test-pseudotcp-random.sh'),
+       args: test_pseudotcp)
 endif
 
 debugenv = environment()
-debugenv.set('G_MESSAGES_DEBUG', 'all')
+#debugenv.set('G_MESSAGES_DEBUG', 'libnice')
 debugenv.set('NICE_DEBUG', 'all')
 add_test_setup('debug', env: debugenv)

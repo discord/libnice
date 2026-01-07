@@ -44,28 +44,19 @@
 static gboolean
 plugin_init (GstPlugin *plugin)
 {
-  if (!gst_element_register (plugin, "nicesrc",
-        GST_RANK_NONE, GST_TYPE_NICE_SRC))
+  if (!gst_element_register_nicesrc (plugin))
     return FALSE;
 
-  if (!gst_element_register (plugin, "nicesink",
-        GST_RANK_NONE, GST_TYPE_NICE_SINK))
+  if (!gst_element_register_nicesink (plugin))
     return FALSE;
 
   return TRUE;
 }
 
-#if GST_CHECK_VERSION (1,0,0)
-#define PLUGIN_NAME nice
-#else
-#define PLUGIN_NAME "nice"
-#endif
-
 GST_PLUGIN_DEFINE (
     GST_VERSION_MAJOR,
     GST_VERSION_MINOR,
-    PLUGIN_NAME,
+    nice,
     "Interactive UDP connectivity establishment",
     plugin_init, VERSION, "LGPL", PACKAGE_NAME,
-    "http://telepathy.freedesktop.org/wiki/");
-
+    "https://nice.freedesktop.org/");

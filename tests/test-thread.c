@@ -46,13 +46,13 @@
 #include <unistd.h>
 #endif
 
-GMainLoop *error_loop;
-
 volatile gint global_lagent_cands = 0;
 volatile gint global_ragent_cands = 0;
 
-volatile gint global_lagent_buffers = 0;
-volatile gint global_ragent_buffers = 0;
+GMutex buffers_mutex;
+GCond buffers_cond;
+gint global_lagent_buffers = 0;
+gint global_ragent_buffers = 0;
 
 /* Waits about 10 seconds for @var to be NULL/FALSE */
 #define WAIT_UNTIL_UNSET(var, context)			\
@@ -66,26 +66,13 @@ volatile gint global_ragent_buffers = 0;
 	  g_main_context_iteration (context, FALSE);	\
 	}						\
 							\
-      g_assert (!(var));				\
+      g_assert_true (!(var));				\
     }
-
-static gboolean timer_cb (gpointer pointer)
-{
-  g_debug ("test-thread:%s: %p", G_STRFUNC, pointer);
-
-  /* note: should not be reached, abort */
-  g_debug ("ERROR: test has got stuck, aborting...");
-  exit (-1);
-
-}
 
 static gpointer
 mainloop_thread (gpointer data)
 {
   GMainLoop *loop = data;
-
-  /* Synchronise thread starting. */
-  while (!g_main_loop_is_running (error_loop));
 
   g_main_loop_run (loop);
 
@@ -132,7 +119,7 @@ static void cb_candidate_gathering_done(NiceAgent *agent, guint stream_id, gpoin
   g_free (password);
 
   cands = nice_agent_get_local_candidates(agent, id, 1);
-  g_assert (cands != NULL);
+  g_assert_true (cands != NULL);
 
   nice_agent_set_remote_candidates (other, other_id, 1, cands);
 
@@ -142,13 +129,15 @@ static void cb_candidate_gathering_done(NiceAgent *agent, guint stream_id, gpoin
 }
 
 
-
 static void cb_nice_recv (NiceAgent *agent, guint stream_id, guint component_id, guint len, gchar *buf, gpointer user_data)
 {
   gchar data[10];
-  volatile gint *count = NULL;
-  gint count_val;
+  gint *count = NULL;
 
+  g_debug ("Agent %p Stream %d Component: %d Received %u bytes", agent,
+      stream_id, component_id, len);
+
+  g_mutex_lock (&buffers_mutex);
   if (GPOINTER_TO_UINT (user_data) == 1)
     count = &global_lagent_buffers;
   else if (GPOINTER_TO_UINT (user_data) == 2)
@@ -156,21 +145,19 @@ static void cb_nice_recv (NiceAgent *agent, guint stream_id, guint component_id,
   else
     g_error ("Invalid agent ?");
 
-  count_val = g_atomic_int_get (count);
-  if (count_val == 10)
+  if (*count == 10)
     return;
 
-  g_assert (len == 10);
 
-  memset (data, count_val + '1', 10);
+  memset (data, *count + '1', 10);
 
-  g_assert (memcmp (buf, data, 10) == 0);
+  g_assert_cmpmem (buf, len, data, 10);
+  g_assert_cmpuint (len, ==, 10);
 
-  g_atomic_int_inc (count);
+  (*count)++;
 
-  if (g_atomic_int_get (&global_ragent_buffers) == 10 &&
-      g_atomic_int_get (&global_lagent_buffers) == 10)
-    g_main_loop_quit (error_loop);
+  g_cond_signal (&buffers_cond);
+  g_mutex_unlock (&buffers_mutex);
 }
 
 
@@ -183,6 +170,9 @@ static void cb_component_state_changed (NiceAgent *agent,
   int i;
   gchar data[10];
 
+  g_debug("Agent %p Stream %d Component %d state %s", agent, stream_id,
+      component_id, nice_component_state_to_string (state));
+
   if (state != NICE_COMPONENT_STATE_READY)
     return;
 
@@ -190,9 +180,13 @@ static void cb_component_state_changed (NiceAgent *agent,
     {
       memset (data, i+'1', 10);
 
+      g_debug ("Agent %p Stream: %d Component: %d Sending 10 bytes", agent, stream_id,
+          component_id);
+
       nice_agent_send (agent, stream_id, component_id, 10, data);
     }
 }
+
 
 int main (void)
 {
@@ -222,9 +216,6 @@ int main (void)
   ldmainloop = g_main_loop_new (ldmainctx, FALSE);
   rdmainloop = g_main_loop_new (rdmainctx, FALSE);
 
-  error_loop = g_main_loop_new (NULL, FALSE);
-
-
   /* step: create the agents L and R */
   lagent = nice_agent_new (lmainctx, NICE_COMPATIBILITY_MSN);
   ragent = nice_agent_new (rmainctx, NICE_COMPATIBILITY_MSN);
@@ -236,9 +227,6 @@ int main (void)
   g_object_set (G_OBJECT (ragent), "controlling-mode", FALSE, NULL);
   g_object_set (G_OBJECT (lagent), "upnp", FALSE, NULL);
   g_object_set (G_OBJECT (ragent), "upnp", FALSE, NULL);
-
-  /* step: add a timer to catch state changes triggered by signals */
-  g_timeout_add (30000, timer_cb, NULL);
 
   /* step: specify which local interface to use */
   if (!nice_address_set_from_string (&baseaddr, "127.0.0.1"))
@@ -275,15 +263,15 @@ int main (void)
     guint port = 0;
     gboolean mode = FALSE;
     g_object_get (G_OBJECT (lagent), "stun-server", &string, NULL);
-    g_assert (stun_server == NULL || strcmp (string, stun_server) == 0);
+    g_assert_true (stun_server == NULL || strcmp (string, stun_server) == 0);
     g_free (string);
     g_object_get (G_OBJECT (lagent), "stun-server-port", &port, NULL);
-    g_assert (stun_server_port == NULL || port == (guint)atoi (stun_server_port));
+    g_assert_true (stun_server_port == NULL || port == (guint)atoi (stun_server_port));
     g_object_get (G_OBJECT (lagent), "controlling-mode", &mode, NULL);
-    g_assert (mode == TRUE);
+    g_assert_true (mode == TRUE);
     g_object_set (G_OBJECT (lagent), "max-connectivity-checks", 300, NULL);
     g_object_get (G_OBJECT (lagent), "max-connectivity-checks", &max_checks, NULL);
-    g_assert (max_checks == 300);
+    g_assert_cmpuint (max_checks, ==, 300);
   }
 
   /* step: run test the first time */
@@ -292,13 +280,13 @@ int main (void)
   lthread = g_thread_new ("lthread libnice", mainloop_thread, lmainloop);
   rthread = g_thread_new ("rthread libnice", mainloop_thread, rmainloop);
 
-  g_assert (lthread);
-  g_assert (rthread);
+  g_assert_true (lthread);
+  g_assert_true (rthread);
 
   ls_id = nice_agent_add_stream (lagent, 2);
   rs_id = nice_agent_add_stream (ragent, 2);
-  g_assert (ls_id > 0);
-  g_assert (rs_id > 0);
+  g_assert_cmpuint (ls_id, >, 0);
+  g_assert_cmpuint (rs_id, >, 0);
 
   g_object_set_data (G_OBJECT (lagent), "id", GUINT_TO_POINTER (ls_id));
   g_object_set_data (G_OBJECT (ragent), "id", GUINT_TO_POINTER (rs_id));
@@ -314,11 +302,20 @@ int main (void)
   ldthread = g_thread_new ("ldthread libnice", mainloop_thread, ldmainloop);
   rdthread = g_thread_new ("rdthread libnice", mainloop_thread, rdmainloop);
 
-  g_assert (ldthread);
-  g_assert (rdthread);
+  g_assert_true (ldthread);
+  g_assert_true (rdthread);
 
-  /* Run loop for error timer */
-  g_main_loop_run (error_loop);
+  g_debug ("ragent_buffers: %d lagent_buffers: %d", global_lagent_buffers,
+      global_ragent_buffers);
+  g_mutex_lock (&buffers_mutex);
+  while (global_ragent_buffers < 10 ||
+      global_lagent_buffers < 10) {
+    g_cond_wait (&buffers_cond, &buffers_mutex);
+    g_debug ("ragent_buffers: %d lagent_buffers: %d", global_lagent_buffers,
+        global_ragent_buffers);
+  }
+  g_mutex_unlock (&buffers_mutex);
+
 
   while (!g_main_loop_is_running (ldmainloop));
   while (g_main_loop_is_running (ldmainloop))
@@ -339,8 +336,8 @@ int main (void)
   g_thread_join (rthread);
 
   /* note: verify that correct number of local candidates were reported */
-  g_assert (g_atomic_int_get (&global_lagent_cands) == 1);
-  g_assert (g_atomic_int_get (&global_ragent_cands) == 1);
+  g_assert_cmpint (g_atomic_int_get (&global_lagent_cands), ==, 1);
+  g_assert_cmpint (g_atomic_int_get (&global_ragent_cands), ==, 1);
 
   g_object_add_weak_pointer (G_OBJECT (lagent), (gpointer *) &lagent);
   g_object_add_weak_pointer (G_OBJECT (ragent), (gpointer *) &ragent);
@@ -356,7 +353,6 @@ int main (void)
   g_main_loop_unref (ldmainloop);
   g_main_loop_unref (rdmainloop);
 
-  g_main_loop_unref (error_loop);
 #ifdef G_OS_WIN32
   WSACleanup();
 #endif

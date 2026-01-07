@@ -73,6 +73,8 @@ int main (void)
   guint ls_id, rs_id_1, rs_id_2;
   gchar *lufrag = NULL, *lpassword = NULL;
   gchar *rufrag1 = NULL, *rpassword1 = NULL, *rufrag2 = NULL, *rpassword2 = NULL;
+  NiceAddress addr;
+
 
 #ifdef G_OS_WIN32
   WSADATA w;
@@ -80,12 +82,18 @@ int main (void)
   WSAStartup(0x0202, &w);
 #endif
 
+  /* Initialize nice agents */
+  nice_address_init (&addr);
+  nice_address_set_from_string (&addr, "127.0.0.1");
+
   global_mainloop = g_main_loop_new (NULL, FALSE);
 
   /* step: create the agents L and R */
   lagent = nice_agent_new (g_main_loop_get_context (global_mainloop),
       NICE_COMPATIBILITY_GOOGLE);
   g_debug ("lagent: %p", lagent);
+
+  nice_agent_add_local_address (lagent, &addr);
   nice_agent_set_software (lagent, "test-different-number-streams, Left Agent");
   g_object_set (G_OBJECT (lagent), "ice-tcp", FALSE,  NULL);
   g_object_set (G_OBJECT (lagent), "controlling-mode", TRUE, NULL);
@@ -98,6 +106,8 @@ int main (void)
   ragent = nice_agent_new (g_main_loop_get_context (global_mainloop),
       NICE_COMPATIBILITY_GOOGLE);
   g_debug ("ragent: %p", ragent);
+
+  nice_agent_add_local_address (ragent, &addr);
   nice_agent_set_software (ragent, "test-different-number-streams, Right Agent");
   g_object_set (G_OBJECT (ragent), "ice-tcp", FALSE,  NULL);
   g_object_set (G_OBJECT (ragent), "controlling-mode", FALSE, NULL);
@@ -111,7 +121,7 @@ int main (void)
   timer_id = g_timeout_add (30000, timer_cb, NULL);
 
   ls_id = nice_agent_add_stream (lagent, 2);
-  g_assert (ls_id > 0);
+  g_assert_cmpuint (ls_id, >, 0);
   nice_agent_get_local_credentials(lagent, ls_id, &lufrag, &lpassword);
 
   /* step: attach to mainloop (needed to register the fds) */
@@ -124,19 +134,19 @@ int main (void)
 
   if (ADD_2_STREAMS) {
     rs_id_1 = nice_agent_add_stream (ragent, 2);
-    g_assert (rs_id_1 > 0);
+    g_assert_cmpuint (rs_id_1, >, 0);
     nice_agent_get_local_credentials(ragent, rs_id_1, &rufrag1, &rpassword1);
 
     rs_id_2 = nice_agent_add_stream (ragent, 2);
-    g_assert (rs_id_2 > 0);
+    g_assert_cmpuint (rs_id_2, >, 0);
     nice_agent_get_local_credentials(ragent, rs_id_2, &rufrag2, &rpassword2);
 
     nice_agent_set_remote_credentials (ragent, rs_id_2, lufrag, lpassword);
     nice_agent_set_remote_credentials (lagent, ls_id, rufrag2, rpassword2);
 
-    g_assert (nice_agent_gather_candidates (lagent, ls_id) == TRUE);
-    g_assert (nice_agent_gather_candidates (ragent, rs_id_2) == TRUE);
-    g_assert (nice_agent_gather_candidates (ragent, rs_id_1) == TRUE);
+    g_assert_true (nice_agent_gather_candidates (lagent, ls_id) == TRUE);
+    g_assert_true (nice_agent_gather_candidates (ragent, rs_id_2) == TRUE);
+    g_assert_true (nice_agent_gather_candidates (ragent, rs_id_1) == TRUE);
 
     if (USE_SECOND_STREAM) {
       set_candidates (ragent, rs_id_2, lagent, ls_id, NICE_COMPONENT_TYPE_RTP);
@@ -161,14 +171,14 @@ int main (void)
         g_main_loop_get_context (global_mainloop), cb_nice_recv, NULL);
   } else {
     rs_id_1 = nice_agent_add_stream (ragent, 2);
-    g_assert (rs_id_1 > 0);
+    g_assert_cmpuint (rs_id_1, >, 0);
     nice_agent_get_local_credentials(ragent, rs_id_1, &rufrag1, &rpassword1);
 
     nice_agent_set_remote_credentials (ragent, rs_id_1, lufrag, lpassword);
     nice_agent_set_remote_credentials (lagent, ls_id, rufrag1, rpassword1);
 
-    g_assert (nice_agent_gather_candidates (lagent, ls_id) == TRUE);
-    g_assert (nice_agent_gather_candidates (ragent, rs_id_1) == TRUE);
+    g_assert_true (nice_agent_gather_candidates (lagent, ls_id) == TRUE);
+    g_assert_true (nice_agent_gather_candidates (ragent, rs_id_1) == TRUE);
 
     /* step: attach to mainloop (needed to register the fds) */
     nice_agent_attach_recv (ragent, rs_id_1, NICE_COMPONENT_TYPE_RTP,

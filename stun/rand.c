@@ -39,36 +39,20 @@
 
 #include "rand.h"
 
-
-#ifdef _WIN32
+#if defined(USE_WIN32_CRYPTO)
 
 #include <windows.h>
-#include <wincrypt.h>
 
 void nice_RAND_nonce (uint8_t *dst, int len)
 {
-  HCRYPTPROV hCryptProv;
-  LPCSTR container = "Libnice key container";
+  HCRYPTPROV prov;
 
-  if(!CryptAcquireContext(&hCryptProv, container, NULL, PROV_RSA_FULL, 0)) {
-    /* non existing container. try to create a new one */
-    // I hope this cast here doesn't cause issues
-    // gcc was complaining about comparing signed and unsigned values
-    if (GetLastError() == (DWORD) NTE_BAD_KEYSET) {
-      if(!CryptAcquireContext(&hCryptProv, container, NULL, PROV_RSA_FULL, CRYPT_NEWKEYSET)) {
-        return;
-      }
-    }
-    return;
-  }
-
-  CryptGenRandom (hCryptProv, len, dst);
-
-  CryptReleaseContext(hCryptProv,0);
+  CryptAcquireContextW (&prov, NULL, NULL, PROV_RSA_FULL, CRYPT_VERIFYCONTEXT);
+  CryptGenRandom (prov, len, dst);
+  CryptReleaseContext (prov, 0);
 }
-#else
 
-#ifdef HAVE_OPENSSL
+#elif defined(HAVE_OPENSSL)
 
 #include <openssl/rand.h>
 
@@ -77,7 +61,7 @@ void nice_RAND_nonce (uint8_t *dst, int len)
   RAND_bytes (dst, len);
 }
 
-#else
+#elif defined(HAVE_GNUTLS)
 
 #include <sys/types.h>
 #include <gnutls/gnutls.h>
@@ -88,6 +72,4 @@ void nice_RAND_nonce (uint8_t *dst, int len)
   gnutls_rnd (GNUTLS_RND_NONCE, dst, len);
 }
 
-#endif /* HAVE_OPENSSL */
-
-#endif /* _WIN32 */
+#endif

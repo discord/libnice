@@ -61,17 +61,17 @@ main (void)
   agent = nice_agent_new (NULL, NICE_COMPATIBILITY_RFC5245);
   nice_agent_add_local_address (agent, &addr);
 
-  g_assert (nice_agent_add_stream (agent, 1) == 1);
-  g_assert (nice_agent_add_stream (agent, 10) == 2);
-  g_assert (nice_agent_add_stream (agent, 2) == 3);
+  g_assert_cmpuint (nice_agent_add_stream (agent, 1), ==, 1);
+  g_assert_cmpuint (nice_agent_add_stream (agent, 10), ==, 2);
+  g_assert_cmpuint (nice_agent_add_stream (agent, 2), ==, 3);
 
-  g_assert (NULL != agent->streams);
+  g_assert_true (NULL != agent->streams);
 
   nice_agent_remove_stream (agent, 1);
   nice_agent_remove_stream (agent, 2);
   nice_agent_remove_stream (agent, 3);
 
-  g_assert (NULL == agent->streams);
+  g_assert_true (NULL == agent->streams);
 
   g_object_unref (agent);
 #ifdef G_OS_WIN32

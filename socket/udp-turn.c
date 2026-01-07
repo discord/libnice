@@ -108,6 +108,7 @@ typedef struct {
 
   GByteArray *fragment_buffer;
   NiceAddress from;
+  uint8_t *send_buffer;
 } UdpTurnPriv;
 
 
@@ -256,6 +257,8 @@ nice_udp_turn_socket_new (GMainContext *ctx, NiceAddress *addr,
           (GDestroyNotify) nice_address_free,
           priv_send_data_queue_destroy);
 
+  priv->send_buffer = g_malloc (STUN_MAX_MESSAGE_SIZE);
+
   sock->type = NICE_SOCKET_TYPE_UDP_TURN;
   sock->fileno = NULL;
   sock->addr = *addr;
@@ -333,6 +336,8 @@ socket_close (NiceSocket *sock)
     g_byte_array_free(priv->fragment_buffer, TRUE);
   }
 
+  g_free (priv->send_buffer);
+
   g_free (priv);
 
   sock->priv = NULL;
@@ -362,7 +367,7 @@ socket_recv_messages (NiceSocket *sock,
     guint f_buffer_len = priv->fragment_buffer->len;
 
     for (i = 0; i < n_recv_messages && f_buffer_len >= sizeof (guint16); ++i) {
-      guint16 msg_len = ntohs (*(guint16 *)f_buffer) + sizeof (guint16);
+      guint32 msg_len = ((f_buffer[0] << 8) | f_buffer[1]) + sizeof (guint16);
 
       if (msg_len > f_buffer_len) {
         /* The next message in the buffer isn't complete yet. Wait for more
@@ -450,9 +455,9 @@ socket_recv_messages (NiceSocket *sock,
     if (nice_socket_is_reliable (sock) && parsed_buffer_length > 0) {
       /* Determine the portion of the current NiceInputMessage we can already
        * return. */
-      guint16 msg_len = 0;
+      gint32 msg_len = 0;
       if (!priv->fragment_buffer) {
-        msg_len = ntohs (*(guint16 *)buffer) + sizeof (guint16);
+        msg_len = ((buffer[0] << 8) | buffer[1]) + sizeof (guint16);
         if (msg_len > parsed_buffer_length) {
           /* The RFC4571 frame is larger than the current TURN message, need to
            * buffer it and wait for more data. */
@@ -787,7 +792,7 @@ socket_send_message (NiceSocket *sock, const NiceAddress *to,
 {
   UdpTurnPriv *priv = (UdpTurnPriv *) sock->priv;
   StunMessage msg;
-  uint8_t buffer[STUN_MAX_MESSAGE_SIZE];
+  uint8_t *buffer;
   size_t msg_len;
   union {
     struct sockaddr_storage storage;
@@ -799,6 +804,8 @@ socket_send_message (NiceSocket *sock, const NiceAddress *to,
 
   /* Make sure socket has not been freed: */
   g_assert (sock->priv != NULL);
+
+  buffer = priv->send_buffer;
 
   for (i = priv->channels; i; i = i->next) {
     ChannelBinding *b = i->data;
@@ -815,7 +822,7 @@ socket_send_message (NiceSocket *sock, const NiceAddress *to,
         priv->compatibility == NICE_TURN_SOCKET_COMPATIBILITY_RFC5766) {
       gsize message_len = output_message_get_size (message);
 
-      if (message_len + sizeof(uint32_t) <= sizeof(buffer)) {
+      if (message_len + sizeof(uint32_t) <= STUN_MAX_MESSAGE_SIZE) {
         guint j;
         uint16_t len16, channel16;
         gsize message_offset = 0;
@@ -861,7 +868,7 @@ socket_send_message (NiceSocket *sock, const NiceAddress *to,
     if (priv->compatibility == NICE_TURN_SOCKET_COMPATIBILITY_DRAFT9 ||
         priv->compatibility == NICE_TURN_SOCKET_COMPATIBILITY_RFC5766) {
       if (!stun_agent_init_indication (&priv->agent, &msg,
-              buffer, sizeof(buffer), STUN_IND_SEND))
+              buffer, STUN_MAX_MESSAGE_SIZE, STUN_IND_SEND))
         goto error;
       if (stun_message_append_xor_addr (&msg, STUN_ATTRIBUTE_PEER_ADDRESS,
               &sa.storage, sizeof(sa)) !=
@@ -869,7 +876,7 @@ socket_send_message (NiceSocket *sock, const NiceAddress *to,
         goto error;
     } else {
       if (!stun_agent_init_request (&priv->agent, &msg,
-              buffer, sizeof(buffer), STUN_SEND))
+              buffer, STUN_MAX_MESSAGE_SIZE, STUN_SEND))
         goto error;
 
       if (stun_message_append32 (&msg, STUN_ATTRIBUTE_MAGIC_COOKIE,
@@ -889,16 +896,22 @@ socket_send_message (NiceSocket *sock, const NiceAddress *to,
       if (priv->compatibility == NICE_TURN_SOCKET_COMPATIBILITY_GOOGLE &&
           priv->current_binding &&
           nice_address_equal (&priv->current_binding->peer, to)) {
-        stun_message_append32 (&msg, STUN_ATTRIBUTE_OPTIONS, 1);
+        if (stun_message_append32 (&msg, STUN_ATTRIBUTE_OPTIONS, 1) !=
+            STUN_MESSAGE_RETURN_SUCCESS)
+          goto error;
       }
     }
 
     if (priv->compatibility == NICE_TURN_SOCKET_COMPATIBILITY_OC2007) {
-      stun_message_append32(&msg, STUN_ATTRIBUTE_MS_VERSION, 1);
+      if(stun_message_append32(&msg, STUN_ATTRIBUTE_MS_VERSION, 1) !=
+            STUN_MESSAGE_RETURN_SUCCESS)
+          goto error;
 
       if (priv->ms_connection_id_valid)
-        stun_message_append_ms_connection_id(&msg, priv->ms_connection_id,
-            ++priv->ms_sequence_num);
+        if (stun_message_append_ms_connection_id(&msg, priv->ms_connection_id,
+            ++priv->ms_sequence_num) !=
+            STUN_MESSAGE_RETURN_SUCCESS)
+          goto error;
 
       stun_message_ensure_ms_realm(&msg, priv->ms_realm);
     }
@@ -935,7 +948,8 @@ socket_send_message (NiceSocket *sock, const NiceAddress *to,
     if (priv->compatibility == NICE_TURN_SOCKET_COMPATIBILITY_RFC5766 &&
         !priv_has_permission_for_peer (priv, to)) {
       if (!priv_has_sent_permission_for_peer (priv, to)) {
-        priv_send_create_permission (priv, to);
+        if (!priv_send_create_permission (priv, to))
+          goto error;
       }
 
       /* enque data */
@@ -1086,8 +1100,8 @@ priv_forget_send_request_timeout (gpointer pointer)
     return G_SOURCE_REMOVE;
   }
 
-  send_request_free (req);
   g_queue_remove (req->priv->send_requests, req);
+  send_request_free (req);
 
   g_mutex_unlock (&mutex);
 
@@ -1195,10 +1209,12 @@ priv_binding_timeout (gpointer data)
   }
 
   nice_debug ("Permission is about to timeout, sending binding renewal");
+  source = g_main_current_source ();
 
   /* find current binding and mark it for renewal */
   for (i = priv->channels ; i; i = i->next) {
     ChannelBinding *b = i->data;
+
     if (b->timeout_source == source) {
       b->renew = TRUE;
 
@@ -1278,7 +1294,7 @@ nice_udp_turn_socket_parse_recv_message (NiceSocket *sock, NiceSocket **from_soc
         message->from, message->length, message->buffers[0].buffer,
         message->from, message->buffers[0].buffer, message->length);
 
-    g_assert_cmpuint (len, <=, message->length);
+    g_assert (len <= message->length);
 
     message->length = len;
 
@@ -1451,13 +1467,14 @@ nice_udp_turn_socket_parse_recv (NiceSocket *sock, NiceSocket **from_sock,
               /* check for unauthorized error response */
               if (stun_message_find_error (&msg, &code) ==
                   STUN_MESSAGE_RETURN_SUCCESS &&
-                  (code == 438 || (code == 401 &&
-                      !(recv_realm != NULL &&
-                          recv_realm_len > 0 &&
-                          recv_realm_len == sent_realm_len &&
-                          sent_realm != NULL &&
-                          memcmp (sent_realm, recv_realm,
-                              sent_realm_len) == 0)))) {
+                  (code == STUN_ERROR_STALE_NONCE ||
+                      (code == STUN_ERROR_UNAUTHORIZED &&
+                          !(recv_realm != NULL &&
+                              recv_realm_len > 0 &&
+                              recv_realm_len == sent_realm_len &&
+                              sent_realm != NULL &&
+                              memcmp (sent_realm, recv_realm,
+                                  sent_realm_len) == 0)))) {
 
                 g_free (priv->current_binding_msg);
                 priv->current_binding_msg = NULL;
@@ -1552,13 +1569,14 @@ nice_udp_turn_socket_parse_recv (NiceSocket *sock, NiceSocket **from_sock,
               /* check for unauthorized error response */
               if (stun_message_find_error (&msg, &code) ==
                   STUN_MESSAGE_RETURN_SUCCESS &&
-                  (code == 438 || (code == 401 &&
-                      !(recv_realm != NULL &&
-                          recv_realm_len > 0 &&
-                          recv_realm_len == sent_realm_len &&
-                          sent_realm != NULL &&
-                          memcmp (sent_realm, recv_realm,
-                              sent_realm_len) == 0)))) {
+                  (code == STUN_ERROR_STALE_NONCE ||
+                      (code == STUN_ERROR_UNAUTHORIZED &&
+                          !(recv_realm != NULL &&
+                              recv_realm_len > 0 &&
+                              recv_realm_len == sent_realm_len &&
+                              sent_realm != NULL &&
+                              memcmp (sent_realm, recv_realm,
+                                  sent_realm_len) == 0)))) {
 
                 priv->pending_permissions = g_list_delete_link (
                     priv->pending_permissions, i);
@@ -1995,7 +2013,7 @@ priv_send_create_permission(UdpTurnPriv *priv,
     const NiceAddress *peer)
 {
   guint msg_buf_len;
-  gboolean res = FALSE;
+  gssize res = 0;
   TURNMessage *msg = g_new0 (TURNMessage, 1);
   union {
     struct sockaddr_storage storage;
@@ -2034,6 +2052,11 @@ priv_send_create_permission(UdpTurnPriv *priv,
             msg_buf_len, (gchar *) msg->buffer, FALSE);
     }
 
+    if (res < 0) {
+      g_free(msg);
+      goto done;
+    }
+
     if (nice_socket_is_reliable (priv->base_socket)) {
       stun_timer_start_reliable (&msg->timer,
         STUN_TIMER_DEFAULT_RELIABLE_TIMEOUT);
@@ -2048,7 +2071,8 @@ priv_send_create_permission(UdpTurnPriv *priv,
     g_free(msg);
   }
 
-  return res;
+done:
+  return (res > 0);
 }
 
 static gboolean

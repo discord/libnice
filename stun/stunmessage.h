@@ -74,6 +74,10 @@
 
 typedef struct _StunMessage StunMessage;
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /**
  * StunClass:
  * @STUN_REQUEST: A STUN Request message
@@ -230,6 +234,8 @@ typedef enum
  * attribute as defined by [MS-ICE2]
  * @STUN_ATTRIBUTE_MS_IMPLEMENTATION_VERSION: The IMPLEMENTATION-VERSION
  * optional attribute as defined by [MS-ICE2]
+ * @STUN_ATTRIBUTE_NOMINATION: The NOMINATION attribute as defined by
+ * draft-thatcher-ice-renomination-00 and deployed in Google Chrome
  *
  * Known STUN attribute types as defined by various RFCs and drafts
  */
@@ -309,8 +315,10 @@ typedef enum
   /* 0x8051-0x8053 */      /* reserved */
   STUN_ATTRIBUTE_CANDIDATE_IDENTIFIER=0x8054,     /* MS-ICE2 */
   /* 0x8055-0x806F */      /* reserved */
-  STUN_ATTRIBUTE_MS_IMPLEMENTATION_VERSION=0x8070 /* MS-ICE2 */
-  /* 0x8071-0xFFFF */      /* reserved */
+  STUN_ATTRIBUTE_MS_IMPLEMENTATION_VERSION=0x8070, /* MS-ICE2 */
+  /* 0x8071-0xC000 */      /* reserved */
+  STUN_ATTRIBUTE_NOMINATION=0xC001 /* https://tools.ietf.org/html/draft-thatcher-ice-renomination-00 */
+  /* 0xC002-0xFFFF */      /* reserved */
 } StunAttribute;
 
 
@@ -410,6 +418,8 @@ typedef uint8_t StunTransactionId[STUN_MESSAGE_TRANS_ID_LEN];
  * "Bad Request" error as defined in RFC5389
  * @STUN_ERROR_UNAUTHORIZED: The ERROR-CODE value for the
  * "Unauthorized" error as defined in RFC5389
+ * @STUN_ERROR_FORBIDDEN: The ERROR-CODE value for the
+ * "Forbidden" error as defined in RFC7675
  * @STUN_ERROR_UNKNOWN_ATTRIBUTE: The ERROR-CODE value for the
  * "Unknown Attribute" error as defined in RFC5389
  * @STUN_ERROR_ALLOCATION_MISMATCH:The ERROR-CODE value for the
@@ -453,6 +463,7 @@ typedef enum
   STUN_ERROR_TRY_ALTERNATE=300,      /* RFC5389 */
   STUN_ERROR_BAD_REQUEST=400,      /* RFC5389 */
   STUN_ERROR_UNAUTHORIZED=401,      /* RFC5389 */
+  STUN_ERROR_FORBIDDEN=403,      /* RFC7675 */
   STUN_ERROR_UNKNOWN_ATTRIBUTE=420,    /* RFC5389 */
   STUN_ERROR_ALLOCATION_MISMATCH=437,   /* TURN-12 */
   STUN_ERROR_STALE_NONCE=438,      /* RFC5389 */
@@ -1009,5 +1020,8 @@ bool stun_optional (uint16_t t);
  */
 const char *stun_strerror (StunError code);
 
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _STUN_MESSAGE_H */

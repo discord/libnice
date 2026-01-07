@@ -1,66 +1,346 @@
-image: registry.freedesktop.org/libnice/libnice/build-tools:centos-7
 stages:
+ - containers
  - build
+ - test
+ - deploy
 
-build autotools:
- stage: build
- except:
-  - schedules
- before_script:
-  - yum install -y net-tools
- script:
-  - ifconfig
-  - export BUILD_ID="libnice-$CI_JOB_NAME_$CI_COMMIT_SHA-$CI_JOB_ID"
-  - export PREFIX="$(pwd)/prefix-$BUILD_ID"
-  - export MAKEFLAGS="-j4"
-  - mkdir "$PREFIX"
-  - ./autogen.sh --prefix="$PREFIX" --enable-compile-warnings=error --enable-gtk-doc --enable-introspection
-  - make
-  #- make check
-  - make install
-  #- make distcheck
- artifacts:
-  when: on_failure
-  paths:
-   - nice/test-suite.log
-   - random/test-suite.log
-   - tests/test-suite.log
-   - stun/tests/test-suite.log
-   - config.log
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_COMMIT_BRANCH == "latest-release"
+    - if: $CI_PIPELINE_SOURCE == "web"
 
-build meson:
-  image: 'fedora'
+#
+# Check "allow-edit" checkbox on merge requests with ci-fairy
+#
+
+include:
+  - project: 'freedesktop/ci-templates'
+    file: '/templates/centos.yml'
+    ref: '48c2c583a865bd59be21e8938df247faf460099c'
+  - project: 'freedesktop/ci-templates'
+    file: '/templates/fedora.yml'
+    ref: '48c2c583a865bd59be21e8938df247faf460099c'
+
+.libnice.centos:8:
+  variables:
+    FDO_DISTRIBUTION_VERSION: '8'
+    FDO_DISTRIBUTION_TAG: '2025-05-26-3'
+    FDO_UPSTREAM_REPO: 'libnice/libnice'
+
+.libnice.fedora:42:
+  variables:
+    FDO_DISTRIBUTION_VERSION: '42'
+    FDO_DISTRIBUTION_TAG: '2025-08-11'
+    FDO_UPSTREAM_REPO: 'libnice/libnice'
+
+build-centos-container:8:
+  extends:
+  - .fdo.container-build@centos     # the CI template
+  - .libnice.centos:8               # our template job above
+  stage: containers
+  variables:
+    FDO_DISTRIBUTION_PACKAGES: 'git gnutls-devel gstreamer1-devel gstreamer1-plugins-base gobject-introspection-devel valgrind net-tools graphviz python3-pip'
+    FDO_DISTRIBUTION_EXEC: 'tests/docker/centos8/pip-installs.sh'
+
+build-fedora-container:42:
+  extends:
+  - .fdo.container-build@fedora     # the CI template
+  - .libnice.fedora:42              # our template job above
+  stage: containers
+  variables:
+    FDO_DISTRIBUTION_PACKAGES: 'git gtk-doc gnutls-devel gupnp-igd-devel gstreamer1-devel gstreamer1-plugins-base gobject-introspection-devel valgrind net-tools graphviz meson ninja-build lcov python3-pip coturn file'
+    FDO_DISTRIBUTION_EXEC: 'tests/docker/fedora42/pip-installs.sh'
+
+.build:
   stage: build
+  interruptible: true
   variables:
     PREFIX: "${CI_PROJECT_DIR}/libnice-prefix"
-    DEPENDENCIES: >
-      meson
-      net-tools
-      gnutls-devel
-      gupnp-igd-devel
-      glib2-devel
-      gobject-introspection-devel
-      gstreamer1-devel
-      redhat-rpm-config
+  except:
+    - schedules
   before_script:
-    - dnf install -y ${DEPENDENCIES}
     - mkdir -p "${CI_PROJECT_DIR}"
   script:
-    - meson --werror build/
+    - meson --werror --warnlevel 2 -Dgtk_doc=enabled --prefix=$PREFIX -Db_coverage=true build/
     - ninja -C build/
   artifacts:
     paths:
+      - build/
+
+build centos:8:
+  extends:
+  - .fdo.distribution-image@centos
+  - .libnice.centos:8
+  - .build
+
+build fedora:42:
+  extends:
+  - .fdo.distribution-image@fedora
+  - .libnice.fedora:42
+  - .build
+
+.build windows:
+  image: 'registry.freedesktop.org/gstreamer/gstreamer/amd64/windows:2023-08-24.0-main'
+  stage: 'build'
+  interruptible: true
+  tags:
+    - 'docker'
+    - 'windows'
+    - '2022'
+  variables:
+    MESON_ARGS: >
+      --prefix=${CI_PROJECT_DIR}/libnice-prefix
+    # Make sure any failure in PowerShell scripts is fatal
+    ErrorActionPreference: 'Stop'
+    WarningPreference: 'Stop'
+
+build msys2:
+  extends: .build windows
+  allow_failure: true
+  before_script:
+    # Make sure powershell exists on errors
+    # https://docs.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_preference_variables?view=powershell-6
+    - $ErrorActionPreference = "Stop"
+
+    # For some reason docker build hangs if this is included in the image, needs more troubleshooting
+    - $env:PATH += ';C:\msys64\usr\bin;C:\msys64\mingw64\bin;C:\msys64\mingw32\bin'
+
+    # It seems that the gpg doesn't like the SSL secured version of the keyserver
+    - C:\msys64\usr\bin\bash -c "pacman-key --init && pacman-key --populate msys2 && pacman-key --refresh-keys || true"
+    - C:\msys64\usr\bin\bash -c "pacman-key --init && pacman-key --populate msys2"
+    - C:\msys64\usr\bin\bash -c "pacman-key --refresh-keys || true"
+    - C:\msys64\usr\bin\bash -c "pacman -Sy --noconfirm --needed mingw-w64-x86_64-toolchain ninja"
+
+  script:
+    # Make sure powershell exists on errors
+    # https://docs.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_preference_variables?view=powershell-6
+    - $ErrorActionPreference = "Stop"
+    # For some reason docker build hangs if this is included in the image, needs more troubleshooting
+    - $env:PATH += ';C:\msys64\usr\bin;C:\msys64\mingw64\bin;C:\msys64\mingw32\bin'
+
+    # For some reason, options are separated by newline instead of space, so we
+    # have to replace them first.
+    - $env:MESON_ARGS = $env:MESON_ARGS.replace("`n"," ")
+
+    - $env:PATH += ";C:\msys64\usr\bin;C:\msys64\mingw64/bin;C:\msys64\mingw32/bin"
+
+    # For some reason, options are separated by newline instead of space, so we
+    # have to replace them first.
+    - $env:CI_PROJECT_DIR = $env:CI_PROJECT_DIR.replace('\','/')
+    - $env:MESON_ARGS = $env:MESON_ARGS.replace('\','/')
+
+    # Build and run the tests.
+    # This is part of the same job due to a bug in the gitlab-runner
+    # that prevents us from exporting artifacts with docker-windows
+    # executors. It has since been fixed in gitlab 12.1, but
+    # we are blocked from upgrading currently.
+    #
+    # Gitlab Runner issue: https://gitlab.com/gitlab-org/gitlab-runner/issues/4291
+    # Blocked upgrade issue: https://gitlab.freedesktop.org/gstreamer/gst-ci/issues/6#note_192780
+    - C:\msys64\usr\bin\bash -c "meson build $env:MESON_ARGS"
+    - C:\msys64\usr\bin\bash -c "ninja -j 1 -C build"
+    - C:\msys64\usr\bin\bash -c "meson test -C build --print-errorlogs --suite libnice"
+  artifacts:
+    when: on_failure
+    paths:
+      - build/meson-logs/
+      - build/build.ninja
+
+.build msvc:
+  extends: .build windows
+  variables:
+    GLIB_VERSION: 2.64.2
+  script:
+    # For some reason, options are separated by newline instead of space, so we
+    # have to replace them first.
+    - $env:MESON_ARGS = $env:MESON_ARGS.replace("`n"," ")
+
+    # Build and run the tests.
+    # This is part of the same job due to a bug in the gitlab-runner
+    # that prevents us from exporting artifacts with docker-windows
+    # executors. It has since been fixed in gitlab 12.1, but
+    # we are blocked from upgrading currently.
+    #
+    # Gitlab Runner issue: https://gitlab.com/gitlab-org/gitlab-runner/issues/4291
+    # Blocked upgrade issue: https://gitlab.freedesktop.org/gstreamer/gst-ci/issues/6#note_192780
+    - cmd.exe /C "C:\BuildTools\Common7\Tools\VsDevCmd.bat -host_arch=amd64 -arch=$env:ARCH &&
+        meson subprojects download &&
+        meson wrap promote subprojects\glib-$env:GLIB_VERSION\subprojects\libffi.wrap &&
+        meson wrap promote subprojects\glib-$env:GLIB_VERSION\subprojects\proxy-libintl.wrap &&
+        meson subprojects download"
+    - cmd.exe /C "C:\BuildTools\Common7\Tools\VsDevCmd.bat -host_arch=amd64 -arch=$env:ARCH &&
+        meson build $env:MESON_ARGS &&
+        ninja -C build &&
+        meson test -C build --print-errorlogs --suite libnice"
+  artifacts:
+    reports:
+      junit: build/meson-logs/testlog-*.junit.xml
+    when: on_failure
+    paths:
       - build/meson-logs/
 
+build msvc amd64:
+  extends: .build msvc
+  variables:
+    ARCH: 'amd64'
+
+build msvc x86:
+  extends: .build msvc
+  variables:
+    ARCH: 'x86'
+
+.build msvc openssl:
+  extends: .build windows
+  variables:
+    GLIB_VERSION: 2.64.2
+  script:
+    # For some reason, options are separated by newline instead of space, so we
+    # have to replace them first.
+    - $env:MESON_ARGS = $env:MESON_ARGS.replace("`n"," ")
+    - $env:MESON_ARGS += " -Dcrypto-library=openssl"
+
+    # Build and run the tests.
+    # This is part of the same job due to a bug in the gitlab-runner
+    # that prevents us from exporting artifacts with docker-windows
+    # executors. It has since been fixed in gitlab 12.1, but
+    # we are blocked from upgrading currently.
+    #
+    # Gitlab Runner issue: https://gitlab.com/gitlab-org/gitlab-runner/issues/4291
+    # Blocked upgrade issue: https://gitlab.freedesktop.org/gstreamer/gst-ci/issues/6#note_192780
+    - New-Item -Path subprojects -Name openssl.wrap -Value "[wrap-git]`r`ndirectory=openssl`r`nurl=https://gitlab.freedesktop.org/libnice/openssl-binaries-for-ci.git`r`nrevision=1.1.1c`r`n"
+    - cmd.exe /C "C:\BuildTools\Common7\Tools\VsDevCmd.bat -host_arch=amd64 -arch=$env:ARCH &&
+        meson subprojects download &&
+        meson wrap promote subprojects\glib-$env:GLIB_VERSION\subprojects\libffi.wrap &&
+        meson wrap promote subprojects\glib-$env:GLIB_VERSION\subprojects\proxy-libintl.wrap &&
+        meson subprojects download"
+    - cmd.exe /C "C:\BuildTools\Common7\Tools\VsDevCmd.bat -host_arch=amd64 -arch=$env:ARCH &&
+        meson build $env:MESON_ARGS &&
+        ninja -C build &&
+        meson test -C build --print-errorlogs --suite libnice"
+
+build msvc amd64 openssl:
+  extends: .build msvc openssl
+  variables:
+    ARCH: 'amd64'
+
+build msvc x86 openssl:
+  extends: .build msvc openssl
+  variables:
+    ARCH: 'x86'
+
+.test:
+  stage: test
+  extends:
+  interruptible: true
+  except:
+    - schedules
+  before_script:
+    - ifconfig
+  script:
+    - ninja -C build/
+    - meson test -C build/ --setup debug
+  after_script:
+    - ninja -C build coverage
+    - lcov_cobertura build/meson-logs/coverage.info -o build/meson-logs/coverage.xml
+  coverage: '/lines......: \d+\.\d+% /'
+  artifacts:
+    reports:
+      junit: build/meson-logs/testlog-*.junit.xml
+      coverage_report:
+        coverage_format: cobertura
+        path: build/meson-logs/coverage.xml
+    when: on_failure
+    paths:
+      - build/meson-logs/
+
+test centos:8:
+  extends:
+  - .fdo.distribution-image@centos
+  - .libnice.centos:8
+  - .test
+  needs:
+    - build centos:8
+
+test fedora:42:
+  extends:
+  - .fdo.distribution-image@fedora
+  - .libnice.fedora:42
+  - .test
+  needs:
+  - build fedora:42
+
+test valgrind centos:8:
+  extends: test centos:8
+  script:
+    - meson configure build -Dgtk_doc=disabled
+    - ninja -C build/
+    - meson test -C build/ --setup valgrind --print-errorlogs
+
+test valgrind fedora:42:
+  extends: test fedora:42
+  script:
+    - meson configure build -Dgtk_doc=disabled
+    - ninja -C build/
+    - meson test -C build/ --setup valgrind --print-errorlogs
+
+doc-and-install centos:8:
+  stage: test
+  extends:
+  - .fdo.distribution-image@centos
+  - .libnice.centos:8
+  interruptible: true
+  needs:
+    - build centos:8
+  except:
+    - schedules
+  variables:
+    PREFIX: "${CI_PROJECT_DIR}/libnice-prefix"
+  script:
+    - ninja -C build/ libnice-doc
+    - ninja -C build/ install
+    - ls -lR ${PREFIX}
+  artifacts:
+    paths:
+      - build/docs/reference/libnice/html/
+
 submit-to-coverity:
- image: registry.freedesktop.org/libnice/libnice/build-tools/coverity:2017.07
- stage: build
+ stage: test
+ extends:
+  - .fdo.distribution-image@fedora
+  - .libnice.fedora:42
+ variables:
+   COVERITY_PROJECT: libnice
+   PREFIX: "${CI_PROJECT_DIR}/libnice-prefix"
  only:
   - schedules
+  - web
+ dependencies: []
+ before_script:
+  - mkdir -p "${CI_PROJECT_DIR}"
  script:
-  - ./autogen.sh --prefix="$PREFIX" --disable-gtk-doc --disable-introspection
-  - make clean
-  - export PATH="$PATH:/root/cov-analysis-linux64-2017.07/bin"
-  - cov-build --dir cov-int make -j4
+  - curl -v https://scan.coverity.com/download/linux64  -o coverity_tool.tgz  --data "token=${COVERITY_TOKEN}&project=${COVERITY_PROJECT}" && tar xf coverity_tool.tgz && rm coverity_tool.tgz
+  - mv cov-analysis-linux64-* cov-analysis-linux64
+  - meson --werror --warnlevel 2 -Dgtk_doc=disabled -Dintrospection=disabled --prefix=$PREFIX cov-build/
+  - export PATH="$PATH:${CI_PROJECT_DIR}/cov-analysis-linux64/bin"
+  - echo $PATH
+  - cov-build --dir cov-int ninja -C cov-build
   - tar czvf libnice.tgz cov-int
   - curl --form token=$COVERITY_TOKEN --form email=olivier.crete@ocrete.ca --form file=@libnice.tgz --form version="${CI_COMMIT_REF_NAME}-${CI_COMMIT_SHA}" --form description="CI weekly run" https://scan.coverity.com/builds?project=libnice
+
+pages:
+  stage: deploy
+  dependencies:
+    - doc-and-install centos:8
+  only:
+    - latest-release
+  artifacts:
+    paths:
+      - public
+    expire_in: 1 year
+  # For some reason, trigger gets rejected
+  # trigger: libnice/libnice-website
+  script:
+    - mkdir public/
+    - mv build/docs/reference/libnice/html/ public/libnice/

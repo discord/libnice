@@ -106,7 +106,11 @@ nice_input_message_iter_compare (const NiceInputMessageIter *a,
 
 #define NICE_AGENT_TIMER_TA_DEFAULT 20      /* timer Ta, msecs (impl. defined) */
 #define NICE_AGENT_TIMER_TR_DEFAULT 25000   /* timer Tr, msecs (impl. defined) */
-#define NICE_AGENT_MAX_CONNECTIVITY_CHECKS_DEFAULT 100 /* see spec 5.7.3 (ID-19) */
+#define NICE_AGENT_TIMER_CONSENT_DEFAULT 5000    /* msec timer consent freshness connchecks (RFC 7675) */
+#define NICE_AGENT_TIMER_CONSENT_TIMEOUT 30000   /* msec timer for consent checks to timeout and assume consent lost (RFC 7675) */
+#define NICE_AGENT_TIMER_MIN_CONSENT_INTERVAL 4000  /* msec timer minimum for consent lost requests (RFC 7675) */
+#define NICE_AGENT_TIMER_KEEPALIVE_TIMEOUT 50000    /* msec timer for keepalive (without consent checks) to timeout and assume conection lost */
+#define NICE_AGENT_MAX_CONNECTIVITY_CHECKS_DEFAULT 100 /* see RFC 8445 6.1.2.5 */
 
 
 /* An upper limit to size of STUN packets handled (based on Ethernet
@@ -122,18 +126,6 @@ nice_input_message_iter_compare (const NiceInputMessageIter *a,
   ((obj)->compatibility == NICE_COMPATIBILITY_RFC5245 || \
   (obj)->compatibility == NICE_COMPATIBILITY_OC2007R2)
 
-/* A grace period before declaring a component as failed, in msecs. This
- * delay is added to reduce the chance to see the agent receiving new
- * stun activity just after the conncheck list has been declared failed,
- * reactiviting conncheck activity, and causing a (valid) state
- * transitions like that: connecting -> failed -> connecting ->
- * connected -> ready.
- * Such transitions are not buggy per-se, but may break the
- * test-suite, that counts precisely the number of time each state
- * has been set, and doesnt expect these transcient failed states.
- */
-#define NICE_AGENT_MAX_TIMER_GRACE_PERIOD 1000
-
 struct _NiceAgent
 {
   GObject parent;                 /* gobject pointer */
@@ -148,6 +140,7 @@ struct _NiceAgent
   NiceProxyType proxy_type;       /* property: Proxy type */
   gchar *proxy_username;          /* property: Proxy username */
   gchar *proxy_password;          /* property: Proxy password */
+  GHashTable *proxy_extra_headers;/* property: Proxy extra headers */
   gboolean saved_controlling_mode;/* property: controlling-mode */
   guint timer_ta;                 /* property: timer Ta */
   guint max_conn_checks;          /* property: max connectivity checks */
@@ -156,10 +149,13 @@ struct _NiceAgent
   guint stun_initial_timeout;     /* property: stun initial timeout, RTO */
   guint stun_reliable_timeout;    /* property: stun reliable timeout */
   NiceNominationMode nomination_mode; /* property: Nomination mode */
+  gboolean support_renomination;  /* property: support RENOMINATION STUN attribute */
+  guint idle_timeout;             /* property: conncheck timeout before stop */
 
   GSList *local_addresses;        /* list of NiceAddresses for local
 				     interfaces */
   GSList *streams;                /* list of Stream objects */
+  GSList *pruning_streams;        /* list of Streams current being shut down */
   GMainContext *main_context;     /* main context pointer */
   guint next_candidate_id;        /* id of next created candidate */
   guint next_stream_id;           /* id of next created candidate */
@@ -171,29 +167,37 @@ struct _NiceAgent
   GSource *conncheck_timer_source; /* source of conncheck timer */
   GSource *keepalive_timer_source; /* source of keepalive timer */
   GSList *refresh_list;         /* list of CandidateRefresh items */
+  GSList *pruning_refreshes;      /* list of Refreshes current being shut down*/
   guint64 tie_breaker;            /* tie breaker (ICE sect 5.2
 				     "Determining Role" ID-19) */
   NiceCompatibility compatibility; /* property: Compatibility mode */
   gboolean media_after_tick;       /* Received media after keepalive tick */
+  gboolean upnp_enabled;           /* whether UPnP discovery is enabled */
 #ifdef HAVE_GUPNP
   GUPnPSimpleIgdThread* upnp;	   /* GUPnP Single IGD agent */
-  gboolean upnp_enabled;           /* whether UPnP discovery is enabled */
   guint upnp_timeout;              /* UPnP discovery timeout */
-  GSList *upnp_mapping;            /* NiceAddresses of cands being mapped */
-  GSource *upnp_timer_source;      /* source of upnp timeout timer */
 #endif
   gchar *software_attribute;       /* SOFTWARE attribute */
   gboolean reliable;               /* property: reliable */
+  gboolean bytestream_tcp;         /* property: bytestream-tcp */
   gboolean keepalive_conncheck;    /* property: keepalive_conncheck */
 
+  GCancellable *stun_resolving_cancellable; /* Cancel STUN name resolution */
+  GSList *stun_resolving_list;     /* List of ongoing resolutions */
+  guint turn_resolving_count;      /* Number of outstanding turn server resolve tasks */
+
   GQueue pending_signals;
-  guint16 rfc4571_expecting_length;
   gboolean use_ice_udp;
   gboolean use_ice_tcp;
+  gboolean use_ice_trickle;
 
-  guint conncheck_timer_grace_period; /* ongoing delay before timer stop */
+  guint conncheck_ongoing_idle_delay; /* ongoing delay before timer stop */
   gboolean controlling_mode;          /* controlling mode used by the
                                          conncheck */
+  gboolean consent_freshness;         /* rfc 7675 consent freshness with
+                                         connchecks */
+  gboolean close_forced;              /* property: close-forced */
+  GTask* close_task;                  /* task associated with ongoing nice_agent_close_async() */
   /* XXX: add pointer to internal data struct for ABI-safe extensions */
 };
 
@@ -237,6 +241,10 @@ void agent_signal_initial_binding_request_received (NiceAgent *agent, NiceStream
 
 guint64 agent_candidate_pair_priority (NiceAgent *agent, NiceCandidate *local, NiceCandidate *remote);
 
+NiceSocket * agent_create_tcp_turn_socket (NiceAgent *agent,
+    NiceStream *stream, NiceComponent *component, NiceSocket *nicesock,
+    NiceAddress *server, NiceRelayType type, gboolean reliable_tcp);
+
 typedef gboolean (*NiceTimeoutLockedCallback)(NiceAgent *agent,
     gpointer user_data);
 void agent_timeout_add_with_context (NiceAgent *agent, GSource **out,
@@ -250,7 +258,7 @@ StunUsageIceCompatibility agent_to_ice_compatibility (NiceAgent *agent);
 StunUsageTurnCompatibility agent_to_turn_compatibility (NiceAgent *agent);
 NiceTurnSocketCompatibility agent_to_turn_socket_compatibility (NiceAgent *agent);
 
-void agent_remove_local_candidate (NiceAgent *agent,
+void agent_remove_local_candidate (NiceAgent *agent, NiceStream *stream,
     NiceCandidate *candidate);
 
 void nice_agent_init_stun_agent (NiceAgent *agent, StunAgent *stun_agent);
@@ -283,7 +291,6 @@ input_message_get_size (const NiceInputMessage *message);
 gssize agent_socket_send (NiceSocket *sock, const NiceAddress *addr, gsize len,
     const gchar *buf);
 
-
 guint32
 nice_candidate_jingle_priority (NiceCandidate *candidate);
 
@@ -305,6 +312,11 @@ nice_candidate_ms_ice_priority (const NiceCandidate *candidate,
 guint64
 nice_candidate_pair_priority (guint32 o_prio, guint32 a_prio);
 
+#define NICE_CANDIDATE_PAIR_PRIORITY_MAX_SIZE 32
+
+void
+nice_candidate_pair_priority_to_string (guint64 prio, gchar *string);
+
 /*
  * nice_debug_init:
  *
@@ -324,6 +336,14 @@ gboolean nice_debug_is_enabled (void);
 gboolean nice_debug_is_verbose (void);
 void nice_debug (const char *fmt, ...) G_GNUC_PRINTF (1, 2);
 void nice_debug_verbose (const char *fmt, ...) G_GNUC_PRINTF (1, 2);
+#endif
+
+#if !GLIB_CHECK_VERSION(2, 59, 0)
+#if __GNUC__ > 6
+#define G_GNUC_FALLTHROUGH __attribute__((fallthrough))
+#else
+#define G_GNUC_FALLTHROUGH
+#endif /* __GNUC__ */
 #endif
 
 #endif /*_NICE_AGENT_PRIV_H */

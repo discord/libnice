@@ -533,3 +533,93 @@
 	...
 	fun:g_object_new_valist
 }
+
+
+# GStreamer leaks, we know
+{
+	gst-check-init
+	Memcheck:Leak
+	...
+	fun:gst_check_init
+}
+
+
+{
+	g-quark-init
+	Memcheck:Leak
+	...
+	fun:g_quark_init
+}
+
+# For Glib in RHEL 7
+{
+	g_type_register_fundamental-rhel7
+	Memcheck:Leak
+	...
+	fun:g_type_register_fundamental
+}
+{
+	dl-init-rhel7
+	Memcheck:Leak
+	...
+	fun:_dl_init
+}
+{
+	g-type-class-ref-rhel7
+	Memcheck:Leak
+	...
+	fun:g_type_class_ref
+}
+{
+	invalid-free-in-rhel7
+	Memcheck:Free
+	fun:free
+	fun:__libc_freeres
+}
+{
+	g-thread-pool-push-rhel7
+	Memcheck:Leak
+	...
+	fun:g_thread_pool_push
+}
+{
+	exit-shell-rhel7
+	Memcheck:Leak
+	...
+	fun:exit_shell
+}
+{
+	g-bus-rhel7
+	Memcheck:Leak
+	...
+	fun:g_bus_get_sync
+}
+
+# glibc does not deallocate thread-local storage
+
+{
+   <tls>
+   Memcheck:Leak
+   ...
+   fun:_dl_allocate_tls
+   fun:pthread_create@@*
+}
+
+{
+   <tls>
+   Memcheck:Leak
+   ...
+   fun:_dl_allocate_tls
+}
+
+
+# Ignore GSSDP leaks in RHEL 8
+
+{
+    gssdp-string-rhel8
+    Memcheck:Leak
+    ...
+    obj:*/libgssdp-1.0*
+    ...
+    fun:g_initable_new_valist
+}

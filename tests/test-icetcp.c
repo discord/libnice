@@ -39,6 +39,7 @@
 #endif
 
 #include "agent.h"
+#include "test-common.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -250,21 +251,6 @@ static void set_candidates (NiceAgent *from, guint from_stream,
   g_slist_free (cands);
 }
 
-static void set_credentials (NiceAgent *lagent, guint lstream,
-    NiceAgent *ragent, guint rstream)
-{
-  gchar *ufrag = NULL, *password = NULL;
-
-  nice_agent_get_local_credentials(lagent, lstream, &ufrag, &password);
-  nice_agent_set_remote_credentials (ragent, rstream, ufrag, password);
-  g_free (ufrag);
-  g_free (password);
-  nice_agent_get_local_credentials(ragent, rstream, &ufrag, &password);
-  nice_agent_set_remote_credentials (lagent, lstream, ufrag, password);
-  g_free (ufrag);
-  g_free (password);
-}
-
 static int run_full_test (NiceAgent *lagent, NiceAgent *ragent, NiceAddress *baseaddr, guint ready, guint failed)
 {
   guint ls_id, rs_id;
@@ -293,26 +279,26 @@ static int run_full_test (NiceAgent *lagent, NiceAgent *ragent, NiceAddress *bas
   ls_id = nice_agent_add_stream (lagent, 2);
 
   rs_id = nice_agent_add_stream (ragent, 2);
-  g_assert (ls_id > 0);
-  g_assert (rs_id > 0);
+  g_assert_cmpuint (ls_id, >, 0);
+  g_assert_cmpuint (rs_id, >, 0);
 
   /* Gather candidates */
-  g_assert (nice_agent_gather_candidates (lagent, ls_id) == TRUE);
-  g_assert (nice_agent_gather_candidates (ragent, rs_id) == TRUE);
+  g_assert_true (nice_agent_gather_candidates (lagent, ls_id) == TRUE);
+  g_assert_true (nice_agent_gather_candidates (ragent, rs_id) == TRUE);
 
   {
     GSList *cands = NULL, *i;
     NiceCandidate *cand = NULL;
 
     cands = nice_agent_get_local_candidates (lagent, ls_id, 1);
-    g_assert (g_slist_length (cands) == 2);
+    g_assert_cmpuint (g_slist_length (cands), ==, 2);
     cand = cands->data;
-    g_assert (cand->type == NICE_CANDIDATE_TYPE_HOST);
-    g_assert (cand->transport == NICE_CANDIDATE_TRANSPORT_TCP_ACTIVE ||
+    g_assert_cmpint (cand->type, ==, NICE_CANDIDATE_TYPE_HOST);
+    g_assert_true (cand->transport == NICE_CANDIDATE_TRANSPORT_TCP_ACTIVE ||
               cand->transport == NICE_CANDIDATE_TRANSPORT_TCP_PASSIVE);
     cand = cands->next->data;
-    g_assert (cand->type == NICE_CANDIDATE_TYPE_HOST);
-    g_assert (cand->transport == NICE_CANDIDATE_TRANSPORT_TCP_ACTIVE ||
+    g_assert_cmpint (cand->type, ==, NICE_CANDIDATE_TYPE_HOST);
+    g_assert_true (cand->transport == NICE_CANDIDATE_TRANSPORT_TCP_ACTIVE ||
               cand->transport == NICE_CANDIDATE_TRANSPORT_TCP_PASSIVE);
     for (i = cands; i; i = i->next)
       nice_candidate_free ((NiceCandidate *) i->data);
@@ -339,11 +325,11 @@ static int run_full_test (NiceAgent *lagent, NiceAgent *ragent, NiceAddress *bas
       global_ragent_gathering_done != TRUE) {
     g_debug ("test-icetcp: Added streams, running mainloop until 'candidate-gathering-done'...");
     g_main_loop_run (global_mainloop);
-    g_assert (global_lagent_gathering_done == TRUE);
-    g_assert (global_ragent_gathering_done == TRUE);
+    g_assert_true (global_lagent_gathering_done == TRUE);
+    g_assert_true (global_ragent_gathering_done == TRUE);
   }
 
-  set_credentials (lagent, ls_id, ragent, rs_id);
+  test_common_set_credentials (lagent, ls_id, ragent, rs_id);
 
   /* step: pass the remote candidates to agents  */
   set_candidates (ragent, rs_id, lagent, ls_id, NICE_COMPONENT_TYPE_RTP);
@@ -358,8 +344,8 @@ static int run_full_test (NiceAgent *lagent, NiceAgent *ragent, NiceAddress *bas
   g_main_loop_run (global_mainloop);
 
   /* note: verify that STUN binding requests were sent */
-  g_assert (global_lagent_ibr_received == TRUE);
-  g_assert (global_ragent_ibr_received == TRUE);
+  g_assert_true (global_lagent_ibr_received == TRUE);
+  g_assert_true (global_ragent_ibr_received == TRUE);
 
   /* note: test payload send and receive */
   global_ragent_read = 0;
@@ -381,9 +367,9 @@ static int run_full_test (NiceAgent *lagent, NiceAgent *ragent, NiceAddress *bas
     }
   }
   g_debug ("Sent %d bytes", ret);
-  g_assert (ret == 16);
+  g_assert_cmpint (ret, ==, 16);
   g_main_loop_run (global_mainloop);
-  g_assert (global_ragent_read == 16);
+  g_assert_cmpint (global_ragent_read, ==, 16);
 
   g_debug ("test-icetcp: Ran mainloop, removing streams...");
 
@@ -418,6 +404,8 @@ int main (void)
 
   g_object_set (G_OBJECT (lagent), "ice-udp", FALSE,  NULL);
   g_object_set (G_OBJECT (ragent), "ice-udp", FALSE,  NULL);
+  g_object_set (G_OBJECT (lagent), "upnp", FALSE, NULL);
+  g_object_set (G_OBJECT (ragent), "upnp", FALSE, NULL);
   nice_agent_set_software (lagent, "Test-icetcp, Left Agent");
   nice_agent_set_software (ragent, "Test-icetcp, Right Agent");
 
@@ -457,28 +445,28 @@ int main (void)
   g_debug ("test-icetcp: TEST STARTS / running test for the 1st time");
   result = run_full_test (lagent, ragent, &baseaddr, 4 ,0);
   priv_print_global_status ();
-  g_assert (result == 0);
-  g_assert (global_lagent_state[0] == NICE_COMPONENT_STATE_READY);
-  g_assert (global_lagent_state[1] == NICE_COMPONENT_STATE_READY);
-  g_assert (global_ragent_state[0] == NICE_COMPONENT_STATE_READY);
-  g_assert (global_ragent_state[1] == NICE_COMPONENT_STATE_READY);
+  g_assert_cmpint (result, ==, 0);
+  g_assert_cmpint (global_lagent_state[0], ==, NICE_COMPONENT_STATE_READY);
+  g_assert_cmpint (global_lagent_state[1], ==, NICE_COMPONENT_STATE_READY);
+  g_assert_cmpint (global_ragent_state[0], ==, NICE_COMPONENT_STATE_READY);
+  g_assert_cmpint (global_ragent_state[1], ==, NICE_COMPONENT_STATE_READY);
   /* note: verify that correct number of local candidates were reported */
-  g_assert (global_lagent_cands >= 2);
-  g_assert (global_ragent_cands >= 2);
+  g_assert_cmpint (global_lagent_cands, >=, 2);
+  g_assert_cmpint (global_ragent_cands, >=, 2);
 
 
   /* step: run test again without unref'ing agents */
   g_debug ("test-icetcp: TEST STARTS / running test for the 2nd time");
   result = run_full_test (lagent, ragent, &baseaddr, 4, 0);
   priv_print_global_status ();
-  g_assert (result == 0);
-  g_assert (global_lagent_state[0] == NICE_COMPONENT_STATE_READY);
-  g_assert (global_lagent_state[1] == NICE_COMPONENT_STATE_READY);
-  g_assert (global_ragent_state[0] == NICE_COMPONENT_STATE_READY);
-  g_assert (global_ragent_state[1] == NICE_COMPONENT_STATE_READY);
+  g_assert_cmpint (result, ==, 0);
+  g_assert_cmpint (global_lagent_state[0], ==, NICE_COMPONENT_STATE_READY);
+  g_assert_cmpint (global_lagent_state[1], ==, NICE_COMPONENT_STATE_READY);
+  g_assert_cmpint (global_ragent_state[0], ==, NICE_COMPONENT_STATE_READY);
+  g_assert_cmpint (global_ragent_state[1], ==, NICE_COMPONENT_STATE_READY);
   /* note: verify that correct number of local candidates were reported */
-  g_assert (global_lagent_cands >= 2);
-  g_assert (global_ragent_cands >= 2);
+  g_assert_cmpint (global_lagent_cands, >=, 2);
+  g_assert_cmpint (global_ragent_cands, >=, 2);
 
   g_object_unref (lagent);
   g_object_unref (ragent);

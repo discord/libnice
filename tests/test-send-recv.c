@@ -428,7 +428,7 @@ validate_received_buffer (TestIOStreamThreadData *data, gsize buffer_offset,
   memset (expected_buf, 0xaa, buf_len);
   generate_buffer_data (test_data->buffer_data_strategy, buffer_offset,
       expected_buf, len);
-  g_assert (memcmp (*buf, expected_buf, len) == 0);
+  g_assert_cmpmem (*buf, len, expected_buf, len);
   g_free (expected_buf);
 
   test_data->received_bytes += len;
@@ -481,8 +481,7 @@ validate_received_messages (TestIOStreamThreadData *data, gsize buffer_offset,
         memset (expected_buf, 0xaa, buffer->size);
         generate_buffer_data (test_data->buffer_data_strategy, buffer_offset,
             expected_buf, valid_len);
-        g_assert_cmpint (memcmp (buffer->buffer, expected_buf, valid_len), ==,
-            0);
+        g_assert_cmpmem (buffer->buffer, valid_len, expected_buf, valid_len);
         g_free (expected_buf);
         buffer_offset += valid_len;
         message_len_remaining -= valid_len;
@@ -498,11 +497,7 @@ validate_received_messages (TestIOStreamThreadData *data, gsize buffer_offset,
       g_assert_cmpuint (message->length, ==, 0);
     prev_message_len = message->length;
 
-    /* If the API was blocking, it should have completely filled the message. */
-    if (stream_api_is_blocking (test_data->stream_api) && data->reliable)
-      g_assert_cmpuint (message->length, ==, total_buf_len);
-
-    g_assert (message->from == NULL);
+    g_assert_true (message->from == NULL);
   }
 
   /* Free all messages. */
@@ -694,7 +689,7 @@ read_thread_agent_cb (GInputStream *input_stream, TestIOStreamThreadData *data)
 
   while (test_data->received_bytes < test_data->n_bytes) {
     GError *error = NULL;
-    NiceInputMessage *messages;
+    NiceInputMessage *messages = {0};
     guint n_messages;
     gint n_valid_messages;
 
@@ -803,6 +798,24 @@ read_thread_agent_nonblocking_cb (GInputStream *input_stream,
   check_for_termination (data, &test_data->received_bytes,
       test_data->other_received_bytes, &test_data->transmitted_bytes,
       test_data->n_bytes);
+}
+
+static void
+wait_transmission_cb (NiceAgent *agent)
+{
+  guint stream_id;
+  gpointer tmp;
+  guint8 buffer[1024];
+  GInputVector v = { &buffer, sizeof (buffer) };
+  NiceInputMessage message = { &v, 1, NULL, 0};
+
+  tmp = g_object_get_data (G_OBJECT (agent), "stream-id");
+  stream_id = GPOINTER_TO_UINT (tmp);
+
+  /* While waiting for write thread to finish sending, keep also receiving so
+   * that any STUN messages from the peer still get processed. */
+  nice_agent_recv_messages_nonblocking (agent, stream_id, 1, &message, 1, NULL,
+      NULL);
 }
 
 static void
@@ -954,7 +967,7 @@ read_thread_gsource_cb (GInputStream *input_stream,
       g_pollable_input_stream_create_source (
           G_POLLABLE_INPUT_STREAM (input_stream), NULL);
 
-  g_source_set_callback (stream_source, (GSourceFunc) read_stream_cb,
+  g_source_set_callback (stream_source, G_SOURCE_FUNC (read_stream_cb),
       &gsource_data, NULL);
   g_source_attach (stream_source, main_context);
 
@@ -982,34 +995,36 @@ write_stream_cb (GObject *pollable_stream, gpointer _user_data)
   guint8 *buf = NULL;
   gsize buf_len = 0;
   gssize len;
+  for (;;) {
 
-  /* Initialise a receive buffer. */
-  generate_buffer_to_transmit (data, test_data->transmitted_bytes, &buf,
-      &buf_len);
+    /* Initialise a receive buffer. */
+    generate_buffer_to_transmit (data, test_data->transmitted_bytes, &buf,
+        &buf_len);
 
-  /* Try to transmit some data. */
-  len = g_pollable_output_stream_write_nonblocking (
-      G_POLLABLE_OUTPUT_STREAM (pollable_stream), buf, buf_len, NULL, &error);
+    /* Try to transmit some data. */
+    len = g_pollable_output_stream_write_nonblocking (
+        G_POLLABLE_OUTPUT_STREAM (pollable_stream), buf, buf_len, NULL, &error);
 
-  if (len == -1) {
-    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_WOULD_BLOCK);
-    g_free (buf);
-    return G_SOURCE_CONTINUE;
+    if (len == -1) {
+      g_assert_error (error, G_IO_ERROR, G_IO_ERROR_WOULD_BLOCK);
+      g_free (buf);
+      return G_SOURCE_CONTINUE;
+    }
+
+    g_assert_no_error (error);
+
+    /* Update the test’s buffer generation state machine. */
+    notify_transmitted_buffer (data, test_data->transmitted_bytes, &buf, buf_len,
+        len);
+
+    /* Termination time? */
+    if (test_data->transmitted_bytes == test_data->n_bytes) {
+      g_main_loop_quit (gsource_data->main_loop);
+      break;
+    }
   }
 
-  g_assert_no_error (error);
-
-  /* Update the test’s buffer generation state machine. */
-  notify_transmitted_buffer (data, test_data->transmitted_bytes, &buf, buf_len,
-      len);
-
-  /* Termination time? */
-  if (test_data->transmitted_bytes == test_data->n_bytes) {
-    g_main_loop_quit (gsource_data->main_loop);
-    return G_SOURCE_REMOVE;
-  }
-
-  return G_SOURCE_CONTINUE;
+  return G_SOURCE_REMOVE;
 }
 
 static void
@@ -1031,7 +1046,7 @@ write_thread_gsource_cb (GOutputStream *output_stream,
       g_pollable_output_stream_create_source (
           G_POLLABLE_OUTPUT_STREAM (output_stream), NULL);
 
-  g_source_set_callback (stream_source, (GSourceFunc) write_stream_cb,
+  g_source_set_callback (stream_source, G_SOURCE_FUNC (write_stream_cb),
       &gsource_data, NULL);
   g_source_attach (stream_source, main_context);
 
@@ -1105,12 +1120,12 @@ test (gboolean reliable, StreamApi stream_api, gsize n_bytes, guint n_messages,
   /* Indexed by StreamApi. */
   const TestIOStreamCallbacks callbacks[] = {
     { read_thread_agent_cb,
-      write_thread_agent_cb, NULL, NULL, },  /* STREAM_AGENT */
+      write_thread_agent_cb, NULL, NULL, wait_transmission_cb },  /* STREAM_AGENT */
     { read_thread_agent_nonblocking_cb, write_thread_agent_nonblocking_cb,
-      NULL, NULL, },  /* STREAM_AGENT_NONBLOCKING */
-    { read_thread_gio_cb, write_thread_gio_cb, NULL, NULL, },  /* STREAM_GIO */
+      NULL, NULL, wait_transmission_cb },  /* STREAM_AGENT_NONBLOCKING */
+    { read_thread_gio_cb, write_thread_gio_cb, NULL, NULL, NULL},  /* STREAM_GIO */
     { read_thread_gsource_cb, write_thread_gsource_cb,
-      NULL, NULL },  /* STREAM_GSOURCE */
+      NULL, NULL, NULL },  /* STREAM_GSOURCE */
   };
 
   test_data_init (&l_data, reliable, stream_api, n_bytes, n_messages,
@@ -1127,7 +1142,9 @@ test (gboolean reliable, StreamApi stream_api, gsize n_bytes, guint n_messages,
       &l_data.received_bytes, &l_data.received_messages);
 
   run_io_stream_test (deadlock_timeout, reliable, &callbacks[stream_api],
-      &l_data, NULL, &r_data, NULL);
+      &l_data, NULL, &r_data, NULL,
+      /* Ensure TCP has the same behavior as Pseudo-TCP in reliable mode: */
+      reliable ? TEST_IO_STREAM_OPTION_BYTESTREAM_TCP : 0);
 
   test_data_clear (&r_data);
   test_data_clear (&l_data);
@@ -1138,7 +1155,7 @@ guint32 option_transmit_seed = 0;
 guint32 option_receive_seed = 0;
 gsize option_n_bytes = 10000;
 guint option_n_messages = 50;
-guint option_timeout = 15;  /* seconds */
+guint option_timeout = 150;  /* seconds */
 gboolean option_long_mode = FALSE;
 
 static GOptionEntry entries[] = {

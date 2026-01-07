@@ -41,6 +41,7 @@
 #endif
 
 #include "agent.h"
+#include "candidate-priv.h"
 
 #include "socket/socket.h"
 
@@ -96,8 +97,8 @@ static void cb_nice_recv (NiceAgent *agent, guint stream_id, guint component_id,
    * Assert on any unreleated packet received. This would include anything
    * send before the negotiation is over.
    */
-  g_assert (len == 16);
-  g_assert (strncmp ("1234567812345678", buf, 16) == 0);
+  g_assert_cmpuint (len, ==, 16);
+  g_assert_true (strncmp ("1234567812345678", buf, 16) == 0);
 
   if (component_id == 2)
     return;
@@ -223,10 +224,10 @@ static void set_candidates (NiceAgent *from, guint from_stream,
    */
 
   for (item1 = cands; item1; item1 = item1->next) {
-    NiceCandidate *cand = item1->data;
+    NiceCandidateImpl *cand = item1->data;
     NiceSocket *nicesock = cand->sockptr;
 
-    g_assert (nicesock);
+    g_assert_true (nicesock);
 
     for (item2 = peer_cands; item2; item2 = item2->next) {
       NiceCandidate *target_cand = item2->data;
@@ -257,10 +258,33 @@ static void set_credentials (NiceAgent *lagent, guint lstream,
   g_free (password);
 }
 
+static guint16
+get_port (NiceAgent *agent, guint stream_id, guint component_id)
+{
+  GSList *cands = nice_agent_get_local_candidates (agent, stream_id,
+      component_id);
+  GSList *item;
+  guint16 port = 0;
+
+  g_assert_true (cands != NULL);
+
+  for (item = cands; item; item = item->next) {
+    NiceCandidate *cand = item->data;
+    port = nice_address_get_port (&cand->addr);
+    break;
+  }
+  g_assert_true (port != 0);
+
+  g_slist_free_full (cands, (GDestroyNotify) nice_candidate_free);
+
+  return port;
+}
+
 static int run_full_test (NiceAgent *lagent, NiceAgent *ragent, NiceAddress *baseaddr, guint ready, guint failed)
 {
   guint ls_id, rs_id;
   gint ret;
+  guint16 port;
 
   /* XXX: dear compiler, this is for you */
   (void)baseaddr;
@@ -284,57 +308,63 @@ static int run_full_test (NiceAgent *lagent, NiceAgent *ragent, NiceAddress *bas
   ls_id = nice_agent_add_stream (lagent, 2);
 
   rs_id = nice_agent_add_stream (ragent, 2);
-  g_assert (ls_id > 0);
-  g_assert (rs_id > 0);
+  g_assert_cmpuint (ls_id, >, 0);
+  g_assert_cmpuint (rs_id, >, 0);
 
   /* Gather candidates and test nice_agent_set_port_range */
-  nice_agent_set_port_range (lagent, ls_id, 1, 10000, 10000);
-  nice_agent_set_port_range (lagent, ls_id, 2, 10001, 10001);
-  nice_agent_set_port_range (ragent, rs_id, 1, 12345, 12345);
-  nice_agent_set_port_range (ragent, rs_id, 2, 10000, 10001);
-  g_assert (nice_agent_gather_candidates (lagent, ls_id) == TRUE);
-  g_assert (nice_agent_gather_candidates (ragent, rs_id) == FALSE);
-  g_assert (nice_agent_get_local_candidates (ragent, rs_id, 1) == NULL);
-  g_assert (nice_agent_get_local_candidates (ragent, rs_id, 2) == NULL);
-  nice_agent_set_port_range (ragent, rs_id, 2, 10000, 10002);
-  g_assert (nice_agent_gather_candidates (ragent, rs_id) == TRUE);
+  nice_agent_set_port_range (lagent, ls_id, 1, 10000, 11000);
+  nice_agent_set_port_range (lagent, ls_id, 2, 11000, 12000);
+  g_assert_true (nice_agent_gather_candidates (lagent, ls_id) == TRUE);
+
+  port = get_port (lagent, ls_id, 1);
+  nice_agent_set_port_range (ragent, rs_id, 1, 12000, 13000);
+  nice_agent_set_port_range (ragent, rs_id, 2, port, port);
+  g_assert_true (nice_agent_gather_candidates (ragent, rs_id) == FALSE);
+  g_assert_true (nice_agent_get_local_candidates (ragent, rs_id, 1) == NULL);
+  g_assert_true (nice_agent_get_local_candidates (ragent, rs_id, 2) == NULL);
+  nice_agent_set_port_range (ragent, rs_id, 2, 13000, 14000);
+  g_assert_true (nice_agent_gather_candidates (ragent, rs_id) == TRUE);
 
   {
     GSList *cands = NULL, *i;
     NiceCandidate *cand = NULL;
 
     cands = nice_agent_get_local_candidates (lagent, ls_id, 1);
-    g_assert (g_slist_length (cands) == 1);
+    g_assert_cmpuint (g_slist_length (cands), ==, 1);
     cand = cands->data;
-    g_assert (cand->type == NICE_CANDIDATE_TYPE_HOST);
-    g_assert (nice_address_get_port (&cand->addr) == 10000);
+    g_assert_cmpint (cand->type, ==, NICE_CANDIDATE_TYPE_HOST);
+    g_assert_cmpuint (nice_address_get_port (&cand->addr), >=, 10000);
+    g_assert_cmpuint (nice_address_get_port (&cand->addr), <=, 11000);
     for (i = cands; i; i = i->next)
       nice_candidate_free ((NiceCandidate *) i->data);
     g_slist_free (cands);
 
     cands = nice_agent_get_local_candidates (lagent, ls_id, 2);
-    g_assert (g_slist_length (cands) == 1);
+    g_assert_cmpuint (g_slist_length (cands), ==, 1);
     cand = cands->data;
-    g_assert (cand->type == NICE_CANDIDATE_TYPE_HOST);
-    g_assert (nice_address_get_port (&cand->addr) == 10001);
+    g_assert_cmpuint (cand->type, ==, NICE_CANDIDATE_TYPE_HOST);
+    g_assert_cmpuint (nice_address_get_port (&cand->addr), >=, 11000);
+    g_assert_cmpuint (nice_address_get_port (&cand->addr), <=, 12000);
     for (i = cands; i; i = i->next)
       nice_candidate_free ((NiceCandidate *) i->data);
     g_slist_free (cands);
 
     cands = nice_agent_get_local_candidates (ragent, rs_id, 1);
-    g_assert (g_slist_length (cands) == 1);
+    g_assert_cmpuint (g_slist_length (cands), ==, 1);
     cand = cands->data;
-    g_assert (cand->type == NICE_CANDIDATE_TYPE_HOST);
-    g_assert (nice_address_get_port (&cand->addr) == 12345);
+    g_assert_cmpint (cand->type, ==, NICE_CANDIDATE_TYPE_HOST);
+    g_assert_cmpuint (nice_address_get_port (&cand->addr), >=, 12000);
+    g_assert_cmpuint (nice_address_get_port (&cand->addr), <=, 13000);
     for (i = cands; i; i = i->next)
       nice_candidate_free ((NiceCandidate *) i->data);
     g_slist_free (cands);
 
     cands = nice_agent_get_local_candidates (ragent, rs_id, 2);
-    g_assert (g_slist_length (cands) == 1);
+    g_assert_cmpuint (g_slist_length (cands), ==, 1);
     cand = cands->data;
-    g_assert (cand->type == NICE_CANDIDATE_TYPE_HOST);
-    g_assert (nice_address_get_port (&cand->addr) == 10002);
+    g_assert_cmpint (cand->type, ==, NICE_CANDIDATE_TYPE_HOST);
+    g_assert_cmpuint (nice_address_get_port (&cand->addr), >=, 13000);
+    g_assert_cmpuint (nice_address_get_port (&cand->addr), <=, 14000);
     for (i = cands; i; i = i->next)
       nice_candidate_free ((NiceCandidate *) i->data);
     g_slist_free (cands);
@@ -361,8 +391,8 @@ static int run_full_test (NiceAgent *lagent, NiceAgent *ragent, NiceAddress *bas
       global_ragent_gathering_done != TRUE) {
     g_debug ("test-drop-invalid: Added streams, running mainloop until 'candidate-gathering-done'...");
     g_main_loop_run (global_mainloop);
-    g_assert (global_lagent_gathering_done == TRUE);
-    g_assert (global_ragent_gathering_done == TRUE);
+    g_assert_true (global_lagent_gathering_done == TRUE);
+    g_assert_true (global_ragent_gathering_done == TRUE);
   }
 
   set_credentials (lagent, ls_id, ragent, rs_id);
@@ -380,8 +410,8 @@ static int run_full_test (NiceAgent *lagent, NiceAgent *ragent, NiceAddress *bas
   g_main_loop_run (global_mainloop);
 
   /* note: verify that STUN binding requests were sent */
-  g_assert (global_lagent_ibr_received == TRUE);
-  g_assert (global_ragent_ibr_received == TRUE);
+  g_assert_true (global_lagent_ibr_received == TRUE);
+  g_assert_true (global_ragent_ibr_received == TRUE);
 
   /* note: Send a packet from another address */
   /* These should also be ignored */
@@ -389,13 +419,15 @@ static int run_full_test (NiceAgent *lagent, NiceAgent *ragent, NiceAddress *bas
     NiceCandidate *local_cand = NULL;
     NiceCandidate *remote_cand = NULL;
     NiceSocket *tmpsock;
+    GError *error = NULL;
 
-    g_assert (nice_agent_get_selected_pair (lagent, ls_id, 1, &local_cand,
+    g_assert_true (nice_agent_get_selected_pair (lagent, ls_id, 1, &local_cand,
             &remote_cand));
-    g_assert (local_cand);
-    g_assert (remote_cand);
+    g_assert_true (local_cand);
+    g_assert_true (remote_cand);
 
-    tmpsock = nice_udp_bsd_socket_new (NULL);
+    tmpsock = nice_udp_bsd_socket_new (g_main_context_default (), NULL, &error);
+    g_assert_no_error (error);
     nice_socket_send (tmpsock, &remote_cand->addr, 4, "ABCD");
     nice_socket_send (tmpsock, &local_cand->addr, 5, "ABCDE");
     nice_socket_free (tmpsock);
@@ -404,12 +436,12 @@ static int run_full_test (NiceAgent *lagent, NiceAgent *ragent, NiceAddress *bas
   /* note: test payload send and receive */
   global_ragent_read = 0;
   ret = nice_agent_send (lagent, ls_id, 1, 16, "1234567812345678");
-  g_assert (ret != -1);
+  g_assert_true (ret != -1);
   g_debug ("Sent %d bytes", ret);
-  g_assert (ret == 16);
+  g_assert_cmpint (ret, ==, 16);
   while (global_ragent_read != 16)
     g_main_context_iteration (NULL, TRUE);
-  g_assert (global_ragent_read == 16);
+  g_assert_cmpint (global_ragent_read, ==, 16);
 
   g_debug ("test-drop-invalid: Ran mainloop, removing streams...");
 
@@ -445,6 +477,8 @@ int main (void)
   g_object_set (G_OBJECT (lagent), "ice-tcp", FALSE,  NULL);
   g_object_set (G_OBJECT (ragent), "ice-tcp", FALSE,  NULL);
 
+  g_object_set (G_OBJECT (lagent), "upnp", FALSE, NULL);
+  g_object_set (G_OBJECT (ragent), "upnp", FALSE, NULL);
 
   nice_agent_set_software (lagent, "test-drop-invalid, Left Agent");
   nice_agent_set_software (ragent, "test-drop-invalid, Right Agent");
@@ -489,19 +523,19 @@ int main (void)
   g_debug ("test-drop-invalid: TEST STARTS / running test for the 1st time");
   result = run_full_test (lagent, ragent, &baseaddr, 4 ,0);
   priv_print_global_status ();
-  g_assert (result == 0);
-  g_assert (global_lagent_state[0] == NICE_COMPONENT_STATE_READY);
-  g_assert (global_lagent_state[1] == NICE_COMPONENT_STATE_READY);
-  g_assert (global_ragent_state[0] == NICE_COMPONENT_STATE_READY);
-  g_assert (global_ragent_state[1] == NICE_COMPONENT_STATE_READY);
+  g_assert_cmpint (result, ==, 0);
+  g_assert_cmpint (global_lagent_state[0], ==, NICE_COMPONENT_STATE_READY);
+  g_assert_cmpint (global_lagent_state[1], ==, NICE_COMPONENT_STATE_READY);
+  g_assert_cmpint (global_ragent_state[0], ==, NICE_COMPONENT_STATE_READY);
+  g_assert_cmpint (global_ragent_state[1], ==, NICE_COMPONENT_STATE_READY);
   /* When using TURN, we get peer reflexive candidates for the host cands
      that we removed so we can get another new_selected_pair signal later
      depending on timing/racing, we could double (or not) the amount we expected
   */
 
   /* note: verify that correct number of local candidates were reported */
-  g_assert (global_lagent_cands == 2);
-  g_assert (global_ragent_cands == 2);
+  g_assert_cmpint (global_lagent_cands, ==, 2);
+  g_assert_cmpint (global_ragent_cands, ==, 2);
 
   g_object_unref (lagent);
   g_object_unref (ragent);

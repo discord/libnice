@@ -46,8 +46,6 @@ GST_DEBUG_CATEGORY_STATIC (nicesrc_debug);
 #define GST_CAT_DEFAULT nicesrc_debug
 
 
-#define BUFFER_SIZE (65536)
-
 static GstFlowReturn
 gst_nice_src_create (
   GstPushSrc *basesrc,
@@ -129,11 +127,7 @@ gst_nice_src_class_init (GstNiceSrcClass *klass)
 
   gst_element_class_add_pad_template (gstelement_class,
       gst_static_pad_template_get (&gst_nice_src_src_template));
-#if GST_CHECK_VERSION (1,0,0)
   gst_element_class_set_metadata (gstelement_class,
-#else
-  gst_element_class_set_details_simple (gstelement_class,
-#endif
       "ICE source",
       "Source",
       "Interactive UDP connectivity establishment",
@@ -173,7 +167,6 @@ gst_nice_src_init (GstNiceSrc *src)
 {
   gst_base_src_set_live (GST_BASE_SRC (src), TRUE);
   gst_base_src_set_format (GST_BASE_SRC (src), GST_FORMAT_TIME);
-  gst_base_src_set_do_timestamp (GST_BASE_SRC (src), TRUE);
   src->agent = NULL;
   src->stream_id = 0;
   src->component_id = 0;
@@ -181,7 +174,24 @@ gst_nice_src_init (GstNiceSrc *src)
   src->mainloop = g_main_loop_new (src->mainctx, FALSE);
   src->unlocked = FALSE;
   src->idle_source = NULL;
-  src->outbufs = g_queue_new ();
+  src->outbufs = gst_buffer_list_new ();
+}
+
+static GstClockTime
+gst_nice_src_get_timestamp (GstNiceSrc *src)
+{
+  GstClock *clock;
+  GstClockTime ts;
+
+  GST_OBJECT_LOCK (src);
+  if ((clock = GST_ELEMENT_CLOCK (src))) {
+    ts = gst_clock_get_time (clock) - GST_ELEMENT (src)->base_time;
+  } else {
+    ts = GST_CLOCK_TIME_NONE;
+  }
+  GST_OBJECT_UNLOCK (src);
+
+  return ts;
 }
 
 static void
@@ -195,18 +205,16 @@ gst_nice_src_read_callback (NiceAgent *agent,
   GstBaseSrc *basesrc = GST_BASE_SRC (data);
   GstNiceSrc *nicesrc = GST_NICE_SRC (basesrc);
   GstBuffer *buffer = NULL;
+  GstClockTime dts = gst_nice_src_get_timestamp (nicesrc);
 
-  GST_LOG_OBJECT (agent, "Got buffer, getting out of the main loop");
+  GST_LOG_OBJECT (nicesrc, "Got buffer, adding it to buffer list and getting out of the main loop");
 
-#if GST_CHECK_VERSION (1,0,0)
   buffer = gst_buffer_new_allocate (NULL, len, NULL);
   gst_buffer_fill (buffer, 0, buf, len);
-#else
-  buffer = gst_buffer_new_and_alloc (len);
-  memcpy (GST_BUFFER_DATA (buffer), buf, len);
-#endif
+  GST_BUFFER_DTS (buffer) = GST_BUFFER_PTS (buffer) = dts;
+
   GST_OBJECT_LOCK (nicesrc);
-  g_queue_push_tail (nicesrc->outbufs, buffer);
+  gst_buffer_list_add (nicesrc->outbufs, buffer);
   g_main_loop_quit (nicesrc->mainloop);
   GST_OBJECT_UNLOCK (nicesrc);
 }
@@ -280,33 +288,29 @@ gst_nice_src_create (
   GST_OBJECT_LOCK (basesrc);
   if (nicesrc->unlocked) {
     GST_OBJECT_UNLOCK (basesrc);
-#if GST_CHECK_VERSION (1,0,0)
     return GST_FLOW_FLUSHING;
-#else
-    return GST_FLOW_WRONG_STATE;
-#endif
   }
-  if (g_queue_is_empty (nicesrc->outbufs)) {
+
+  if (!gst_buffer_list_length (nicesrc->outbufs)) {
     GST_OBJECT_UNLOCK (basesrc);
     g_main_loop_run (nicesrc->mainloop);
     GST_OBJECT_LOCK (basesrc);
   }
 
-  *buffer = g_queue_pop_head (nicesrc->outbufs);
+  gst_base_src_submit_buffer_list (GST_BASE_SRC_CAST (basesrc), nicesrc->outbufs);
+  nicesrc->outbufs = gst_buffer_list_new ();
   GST_OBJECT_UNLOCK (basesrc);
 
-  if (*buffer != NULL) {
-    GST_LOG_OBJECT (nicesrc, "Got buffer, pushing");
-    return GST_FLOW_OK;
-  } else {
-    GST_LOG_OBJECT (nicesrc, "Got interrupting, returning wrong-state");
-#if GST_CHECK_VERSION (1,0,0)
-    return GST_FLOW_FLUSHING;
+  /* This is a workaround for a bug in GStreamer versions before 1.26
+   * where it do a critical if the buffer is NULL when returning OK
+   * It was fixed by:
+   * https://gitlab.freedesktop.org/gstreamer/gstreamer/-/merge_requests/6460
+   */
+#if GST_CHECK_VERSION(1, 26, 0)
+  return GST_FLOW_OK;
 #else
-    return GST_FLOW_WRONG_STATE;
+  return gst_base_src_wait_playing (GST_BASE_SRC (basesrc));
 #endif
-  }
-
 }
 
 static void
@@ -326,10 +330,13 @@ gst_nice_src_dispose (GObject *object)
     g_main_context_unref (src->mainctx);
   src->mainctx = NULL;
 
-  if (src->outbufs) {
-    g_queue_free_full (src->outbufs, (GDestroyNotify) gst_buffer_unref);
+  gst_clear_buffer_list (&src->outbufs);
+
+  if (src->idle_source) {
+    g_source_destroy (src->idle_source);
+    g_source_unref(src->idle_source);
   }
-  src->outbufs = NULL;
+  src->idle_source = NULL;
 
   G_OBJECT_CLASS (gst_nice_src_parent_class)->dispose (object);
 }
@@ -429,8 +436,8 @@ gst_nice_src_change_state (GstElement * element, GstStateChange transition)
       nice_agent_attach_recv (src->agent, src->stream_id, src->component_id,
           src->mainctx, NULL, NULL);
       GST_OBJECT_LOCK (src);
-      g_list_free_full (src->outbufs->head, (GDestroyNotify) gst_buffer_unref);
-      g_queue_init (src->outbufs);
+      gst_clear_buffer_list (&src->outbufs);
+      src->outbufs = gst_buffer_list_new ();
       GST_OBJECT_UNLOCK (src);
       break;
     case GST_STATE_CHANGE_READY_TO_PAUSED:
@@ -461,4 +468,9 @@ gst_nice_src_change_state (GstElement * element, GstStateChange transition)
   return ret;
 }
 
-
+gboolean
+gst_element_register_nicesrc (GstPlugin * plugin)
+{
+  return gst_element_register (plugin, "nicesrc", GST_RANK_NONE,
+      GST_TYPE_NICE_SRC);
+}

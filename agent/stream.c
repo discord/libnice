@@ -77,6 +77,8 @@ nice_stream_new (guint stream_id, guint n_components, NiceAgent *agent)
 
   stream->n_components = n_components;
 
+  stream->peer_gathering_done = !agent->use_ice_trickle;
+
   return stream;
 }
 
@@ -87,7 +89,18 @@ nice_stream_close (NiceAgent *agent, NiceStream *stream)
 
   for (i = stream->components; i; i = i->next) {
     NiceComponent *component = i->data;
-    nice_component_close (agent, component);
+    nice_component_close (agent, stream, component);
+  }
+}
+
+void
+nice_stream_cancel_turn_server_resolving (NiceStream *stream)
+{
+  GSList *component_item;
+
+  for (component_item = stream->components; component_item;
+        component_item = component_item->next) {
+    nice_component_cancel_turn_server_resolving (component_item->data);
   }
 }
 
@@ -115,6 +128,13 @@ nice_stream_initialize_credentials (NiceStream *stream, NiceRNG *rng)
    *       '"ice-ufrag" and "ice-pwd" Attributes', ID-19) */
   nice_rng_generate_bytes_print (rng, NICE_STREAM_DEF_UFRAG - 1, stream->local_ufrag);
   nice_rng_generate_bytes_print (rng, NICE_STREAM_DEF_PWD - 1, stream->local_password);
+
+  /* reset remote credentials, because we cannot assume that we'll
+   * receive new remote credentials from the SDP before the conncheck
+   * restarts with new inbound STUN requests
+   */
+  stream->remote_ufrag[0] = 0;
+  stream->remote_password[0] = 0;
 }
 
 /*
@@ -136,7 +156,9 @@ nice_stream_restart (NiceStream *stream, NiceAgent *agent)
   for (i = stream->components; i; i = i->next) {
     NiceComponent *component = i->data;
 
-    nice_component_restart (component);
+    nice_component_restart (component, agent);
+    agent_signal_component_state_change (agent,
+        stream->id, component->id, NICE_COMPONENT_STATE_GATHERING);
   }
 }
 

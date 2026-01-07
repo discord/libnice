@@ -46,7 +46,7 @@ typedef struct _NiceComponent NiceComponent;
 
 #include "agent.h"
 #include "agent-priv.h"
-#include "candidate.h"
+#include "candidate-priv.h"
 #include "stun/stunagent.h"
 #include "stun/usages/timer.h"
 #include "pseudotcp.h"
@@ -65,25 +65,33 @@ G_BEGIN_DECLS
 
 typedef struct _CandidatePair CandidatePair;
 typedef struct _CandidatePairKeepalive CandidatePairKeepalive;
+typedef struct _CandidatePairConsentCheck CandidatePairConsentCheck;
 typedef struct _IncomingCheck IncomingCheck;
 
 struct _CandidatePairKeepalive
 {
-  GSource *tick_source;
+  guint64 next_tick;    /* next tick timestamp */
   guint stream_id;
   guint component_id;
   StunTimer timer;
-  uint8_t stun_buffer[STUN_MAX_MESSAGE_SIZE_IPV6];
-  StunMessage stun_message;
+};
+
+struct _CandidatePairConsentCheck
+{
+  GSource *tick_source;
+  gboolean have;
+  guint64 last_received;        /* g_get_monotonic_time() of last remote
+                                   consent received */
 };
 
 struct _CandidatePair
 {
-  NiceCandidate *local;
-  NiceCandidate *remote;
+  NiceCandidateImpl *local;
+  NiceCandidateImpl *remote;
   guint64 priority;           /* candidate pair priority */
-  guint32 prflx_priority;
+  guint32 stun_priority;
   CandidatePairKeepalive keepalive;
+  CandidatePairConsentCheck remote_consent;
 };
 
 struct _IncomingCheck
@@ -167,7 +175,7 @@ struct _NiceComponent {
 				    see ICE 11.1. "Sending Media" (ID-19) */
   gboolean fallback_mode;      /* in this case, accepts packets from all, ignore candidate validation */
   NiceCandidate *restart_candidate; /* for storing active remote candidate during a restart */
-  NiceCandidate *turn_candidate; /* for storing active turn candidate if turn servers have been cleared */
+  NiceCandidateImpl *turn_candidate; /* for storing active turn candidate if turn servers have been cleared */
   /* I/O handling. The main context must always be non-NULL, and is used for all
    * socket recv() operations. All io_callback emissions are invoked in this
    * context too.
@@ -223,6 +231,29 @@ struct _NiceComponent {
    * ACKs on. The messages are dequeued to the pseudo-TCP socket once a selected
    * UDP socket is available. This is only used for reliable Components. */
   GQueue queued_tcp_packets;
+
+  gboolean have_local_consent;
+
+  /* scratch buffer for use in the component_io_cb() function to
+   * hold the incoming packet, allocated at component creation, since
+   * the callback is a critical path, where memory allocation should
+   * be avoided.
+   */
+  guint8 *recv_buffer;
+  guint recv_buffer_size;
+
+  /* ICE-TCP frame state */
+  guint8 *rfc4571_buffer;
+  guint rfc4571_buffer_offset;
+  guint rfc4571_buffer_size;
+  guint rfc4571_frame_offset;
+  guint rfc4571_frame_size;
+  guint rfc4571_consumed_size;
+  NiceAddress rfc4571_remote_addr;
+  gboolean rfc4571_wakeup_needed;
+
+  /* TURN resolution */
+  GCancellable *turn_resolving_cancellable;
 };
 
 typedef struct {
@@ -235,14 +266,22 @@ NiceComponent *
 nice_component_new (guint component_id, NiceAgent *agent, NiceStream *stream);
 
 void
-nice_component_close (NiceAgent *agent, NiceComponent *component);
+nice_component_close (NiceAgent *agent, NiceStream *stream,
+    NiceComponent *component);
+
+void
+nice_component_cancel_turn_server_resolving (NiceComponent* component);
+
+void
+nice_component_shutdown (NiceComponent *component, gboolean shutdown_read,
+    gboolean shutdown_write);
 
 gboolean
 nice_component_find_pair (NiceComponent *component, NiceAgent *agent,
     const gchar *lfoundation, const gchar *rfoundation, CandidatePair *pair);
 
 void
-nice_component_restart (NiceComponent *component);
+nice_component_restart (NiceComponent *component, NiceAgent *agent);
 
 void
 nice_component_update_selected_pair (NiceAgent *agent, NiceComponent *component,
@@ -252,7 +291,7 @@ NiceCandidate *
 nice_component_find_remote_candidate (NiceComponent *component,
     const NiceAddress *addr, NiceCandidateTransport transport);
 
-NiceCandidate *
+NiceCandidateImpl *
 nice_component_set_selected_remote_candidate (NiceComponent *component,
     NiceAgent *agent, NiceCandidate *candidate);
 
@@ -284,9 +323,12 @@ nice_component_set_io_callback (NiceComponent *component,
     GError **error);
 void
 nice_component_emit_io_callback (NiceAgent *agent, NiceComponent *component,
-    const guint8 *buf, gsize buf_len);
+    gsize buf_len);
 gboolean
 nice_component_has_io_callback (NiceComponent *component);
+void
+nice_component_prune_relay_candidate (NiceAgent *agent,
+    NiceComponent *cmp, NiceCandidateImpl *relay_cand);
 void
 nice_component_clean_turn_servers (NiceAgent *agent, NiceComponent *component);
 
@@ -294,6 +336,9 @@ nice_component_clean_turn_servers (NiceAgent *agent, NiceComponent *component);
 TurnServer *
 turn_server_new (const gchar *server_ip, guint server_port,
     const gchar *username, const gchar *password, NiceRelayType type);
+
+TurnServer *
+turn_server_copy (TurnServer *turn);
 
 TurnServer *
 turn_server_ref (TurnServer *turn);
@@ -308,6 +353,15 @@ nice_component_add_valid_candidate (NiceAgent *agent, NiceComponent *component,
 gboolean
 nice_component_verify_remote_candidate (NiceComponent *component,
     const NiceAddress *address, NiceSocket *nicesock);
+
+GPtrArray *
+nice_component_get_sockets (NiceComponent *component);
+
+guint
+nice_component_compute_rfc4571_headroom (NiceComponent *component);
+
+gboolean
+nice_component_resolving_turn (NiceComponent *component);
 
 
 G_END_DECLS

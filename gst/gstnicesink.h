@@ -70,7 +70,6 @@ struct _GstNiceSink
   gulong writable_id;
   gboolean flushing;
 
-#if GST_CHECK_VERSION (1,0,0)
   /* pre-allocated scrap space for render function */
   GOutputVector *vecs;
   guint n_vecs;
@@ -78,7 +77,6 @@ struct _GstNiceSink
   guint n_maps;
   NiceOutputMessage *messages;
   guint n_messages;
-#endif
 };
 
 typedef struct _GstNiceSinkClass GstNiceSinkClass;
@@ -89,6 +87,8 @@ struct _GstNiceSinkClass
 };
 
 GType gst_nice_sink_get_type (void);
+
+gboolean gst_element_register_nicesink (GstPlugin * plugin);
 
 G_END_DECLS
 

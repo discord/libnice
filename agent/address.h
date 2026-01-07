@@ -51,6 +51,7 @@
 
 
 #include <glib.h>
+#include <glib-object.h>
 
 #ifdef G_OS_WIN32
 #include <winsock2.h>
@@ -64,6 +65,9 @@
 
 G_BEGIN_DECLS
 
+#define NICE_TYPE_ADDRESS (nice_address_get_type())
+
+GType nice_address_get_type (void);
 
 /**
  * NiceAddress:
@@ -256,7 +260,7 @@ gboolean
 nice_address_equal_no_port (const NiceAddress *a, const NiceAddress *b);
 
 /**
- * nice_address_to_string:
+ * nice_address_to_string: (skip)
  * @addr: The #NiceAddress to query
  * @dst: The string to fill
  *
@@ -265,6 +269,19 @@ nice_address_equal_no_port (const NiceAddress *a, const NiceAddress *b);
  */
 void
 nice_address_to_string (const NiceAddress *addr, gchar *dst);
+
+/**
+ * nice_address_dup_string:
+ * @addr: The #NiceAddress to query
+ *
+ * Transforms the address @addr into a newly allocated human readable string
+ *
+ * Returns: (transfer full): the address string
+ *
+ * Since: 0.1.20
+ */
+gchar *
+nice_address_dup_string (const NiceAddress *addr);
 
 /**
  * nice_address_is_private:
@@ -276,6 +293,19 @@ nice_address_to_string (const NiceAddress *addr, gchar *dst);
  */
 gboolean
 nice_address_is_private (const NiceAddress *addr);
+
+/**
+ * nice_address_is_linklocal:
+ * @addr: The #NiceAddress to query
+ *
+ * Verifies if the address in @addr is a link-local address or not
+ *
+ * Returns: %TRUE if @addr is a link-local address, %FALSE otherwise
+ *
+ * Since: 0.1.19
+ */
+gboolean
+nice_address_is_linklocal (const NiceAddress *addr);
 
 /**
  * nice_address_is_valid:
